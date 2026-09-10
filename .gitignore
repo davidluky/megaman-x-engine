@@ -1,0 +1,39 @@
+# Local build products and caches
+build/
+build-*/
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+# Research and game assets are not part of this source distribution.
+ROM/
+content/
+knowledge_base/
+src/generated/
+*.sfc
+*.smc
+*.rom
+*.State
+*.mss
+*.bk2
+*.movie
+*.zip
+*.7z
+*.png
+*.gif
+*.ogg
+*.wav
+*.mp4
+*.exe
+*.dll
+*.a
+*.o
+*.obj
+*.pdb
+# Keep local credentials and configuration out of Git.
+.env
+.env.*
+*.pem
+*.key

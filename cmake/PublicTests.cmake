@@ -101,3 +101,7 @@ mmx_public_add_json_contract(settings_contract_test settings.contract
 mmx_public_add_contract(input_bindings_contract_test input-bindings.contract
     "${MMX_PUBLIC_SOURCE_ROOT}/tests/cpp/input_bindings_contract_test.cpp"
     "${MMX_PUBLIC_SOURCE_ROOT}/src/app/input_bindings.cpp")
+
+# Screen-transform contract: pure math on constants, no window or assets.
+mmx_public_add_contract(screen_transform_contract_test screen-transform.contract
+    "${MMX_PUBLIC_SOURCE_ROOT}/tests/cpp/screen_transform_contract_test.cpp")

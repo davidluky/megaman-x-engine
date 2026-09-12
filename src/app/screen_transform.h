@@ -4,6 +4,8 @@
 
 #include "app/constants.h"
 
+#include <cmath>
+
 namespace mmx::screen_transform {
 
 struct InternalViewport {
@@ -33,6 +35,18 @@ inline InternalViewport internalViewportForWindow(float screenWidth,
     }
 
     const float targetAspect = displayAspect(aspect43);
+
+    // A window whose ratio equals the target gets the full window as the
+    // viewport. Reconstructing the fit dimension (destH = w / target)
+    // accumulates division rounding, which leaves sub-pixel offsets on
+    // exact-ratio windows and pushed native-window corner points just
+    // outside the framebuffer.
+    constexpr float kAspectMatchRelativeEpsilon = 1e-5f;
+    if (std::fabs(screenWidth / screenHeight - targetAspect) <=
+        targetAspect * kAspectMatchRelativeEpsilon) {
+        return {0.0f, 0.0f, screenWidth, screenHeight};
+    }
+
     float destW = screenWidth;
     float destH = screenHeight;
     if (screenWidth / screenHeight > targetAspect) {

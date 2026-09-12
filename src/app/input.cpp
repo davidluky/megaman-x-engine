@@ -176,12 +176,12 @@ void Input::poll() {
         }
     }
 
-    // Jump press (Z / Space / Gamepad A)
+    // Latch action presses using the current bindings (defaults live in InputBindings).
     if (isActionPressed(InputAction::Jump, gp)) {
         jumpPressed_ = true;
     }
 
-    // Dash press (X / Shift / Gamepad B or X)
+    // Dash press
     if (isActionPressed(InputAction::Dash, gp)) {
         dashPressed_ = true;
     }
@@ -196,23 +196,23 @@ void Input::poll() {
     }
     prevShootHeld_ = shootNow;
 
-    // Pause press (Enter / P / Gamepad Start)
+    // Pause press
     if (isActionPressed(InputAction::Pause, gp)) {
         pausePressed_ = true;
     }
 
-    // Confirm (Z / Enter / Space / Gamepad A)
+    // Confirm press
     if (isActionPressed(InputAction::Confirm, gp)) {
         confirmPressed_ = true;
     }
 
-    // Cancel (Escape / Gamepad B) — deliberately NOT the X key, which is Dash.
-    // Sharing X between dash and cancel causes ghost dash inputs on scene transitions.
+    // Cancel has its own validated binding to prevent gameplay presses from
+    // leaking into scene transitions.
     if (isActionPressed(InputAction::Cancel, gp)) {
         cancelPressed_ = true;
     }
 
-    // Weapon cycling (Q = prev, E = next, Gamepad LB/RB)
+    // Weapon cycling actions
     if (isActionPressed(InputAction::WeaponPrev, gp)) {
         weaponPrevPressed_ = true;
     }
@@ -220,7 +220,7 @@ void Input::poll() {
         weaponNextPressed_ = true;
     }
 
-    // Sub-Tank usage (Tab / Gamepad Select/Back)
+    // Sub-Tank action
     if (isActionPressed(InputAction::SubTank, gp)) {
         subTankPressed_ = true;
     }

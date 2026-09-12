@@ -41,6 +41,34 @@ example, a physics helper may set contact flags, while gameplay decides what a
 contact means. A data loader may report a parse or schema error, while the
 caller decides how to present it.
 
+## Input ownership route
+
+`InputBindings` owns action names, defaults, labels and duplicate-binding
+validation. `Input` is the raylib-facing facade: it polls physical devices,
+latches one-shot action events and refreshes held action state. Settings owns
+the serialized bindings, while UI scenes and entities consume actions instead
+of creating their own key policy. This lets a binding change be reviewed at the
+binding boundary and checked through the asset-independent input/settings
+contracts.
+
+## Following a gameplay frame
+
+Start at `GameplayScene::update()` in `src/gameplay/gameplay_scene.cpp`.
+Pause, transitions and scripted presentation have early-return paths; inspect
+those before assuming the normal simulation lane runs. In that normal lane:
+
+| Phase | State owner and next consumer |
+|---|---|
+| Player and terrain | Input actions drive Player; terrain resolution determines its contacts and position |
+| Actors and platforms | Scene-owned enemy/object/boss pools advance; platform support feeds the next Player tick |
+| Shots and existing effects | Projectiles move, then trails and Buster impacts age before new collisions |
+| Contacts and consequences | Collision owners apply damage/pickups; deferred shots, checkpoints and death handling follow |
+| Camera, HUD and diagnostics | Scene orchestration finishes presentation and emits the post-update trace snapshot |
+
+Ordering is behavior: an impact created by a collision must remain at age zero
+for that frame. A new owner should clarify a responsibility while retaining
+these dependencies, rather than regrouping calls only because they look alike.
+
 ## Content and generated-data boundary
 
 The public starter does not contain a playable content pack. The full-engine
@@ -64,6 +92,19 @@ Runtime or visual checks may be added later when their public content and
 environment are documented. Passing a core contract is evidence for that
 contract only; it is not a parity score, a complete-game claim, or a license
 for original media.
+
+## Trace boundary
+
+When the optional full runtime is available, `GameplayScene` owns parity-trace
+stream lifetime, tick timing and its read-only snapshot. The trace adapter
+projects that snapshot into CSV rows and may advance trace-log cursors; it does
+not mutate scene state. Scene-owned effect rows use a callback so their
+established position in the CSV remains explicit without giving the adapter
+ownership of a gameplay pool.
+
+The public checkout compiles this boundary but cannot exercise a content-backed
+runtime trace on its own. A successful public build therefore proves only that
+the source compiles, not trace equivalence or gameplay parity.
 
 ## Portability boundary
 

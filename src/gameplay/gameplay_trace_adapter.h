@@ -123,7 +123,8 @@ template <typename Projectiles,
           typename Pickups,
           typename DeathOrbs,
           typename IceTrailBits,
-          typename TorpedoPuffs>
+          typename TorpedoPuffs,
+          typename ExtraRows>
 inline void writeParityFrame(FILE* trace,
                              long tick,
                              const Camera& camera,
@@ -138,6 +139,7 @@ inline void writeParityFrame(FILE* trace,
                              const DeathOrbs& deathOrbs,
                              const IceTrailBits& iceTrailBits,
                              const TorpedoPuffs& torpedoPuffs,
+                             const ExtraRows& writeExtraRows,
                              std::size_t& apuLogIndex,
                              std::size_t& sfxLogIndex) {
     writeParityRow(
@@ -193,6 +195,18 @@ inline void writeParityFrame(FILE* trace,
             projectile.isShatterFragment ? 1 : 0,
             projectile.ageFrames, projectile.facingRight ? 1 : 0);
     }
+
+    // Some source-backed effects are owned by their gameplay model rather
+    // than the generic frame projection. Keep their rows at the established
+    // point between projectile and enemy rows without giving this adapter
+    // write access to gameplay state.
+    auto writeExtraRow = [&](const char* kind, int serial, const char* id,
+                             int state, int hp, float x, float y, float vx, float vy,
+                             int a, int b, int c, int d) {
+        writeParityRow(trace, tick, kind, serial, id, state, hp, x, y, vx, vy,
+                       a, b, c, d);
+    };
+    writeExtraRows(writeExtraRow);
 
     for (const auto& enemy : enemies) {
         const AABB hitbox = enemy.getHitbox();

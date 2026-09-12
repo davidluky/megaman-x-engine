@@ -139,7 +139,7 @@ void Player::pollInput() {
 }
 
 void Player::processWeaponCycleInput() {
-    // Weapon cycling through Input abstraction (Q/Tab or LB = prev, E or RB = next).
+    // Weapon cycling uses Input actions; InputBindings owns the current keys/buttons.
     // As in the real game, you can't switch weapons while a special-weapon shot
     // is still on screen — the press is consumed but the swap is blocked.
     const bool forceNext = Input::isWeaponNextForced();

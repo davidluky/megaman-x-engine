@@ -10,6 +10,7 @@
 #include "gameplay/gameplay_projectiles.h"
 #include "gameplay/gameplay_scene_trace.h"
 #include "gameplay/gameplay_stage_clear.h"
+#include "gameplay/gameplay_trace_adapter.h"
 #include "gameplay/stage_parity_transitions.h"
 #include "gameplay/cp_source_obj_foreground.h"
 #include "gameplay/gameplay_player_bounds.h"
@@ -1639,119 +1640,24 @@ void GameplayScene::writeParityTrace() {
     if (!parityTrace_) return;
     ++parityTraceTick_;
     updateParityRoomTransitionSignal();
-
-    auto writeRow = [&](const char* kind, int serial, const char* id,
-                        int state, int hp, float x, float y, float vx, float vy,
-                        int a, int b, int c, int d,
-                        int e = 0, int f = 0, int g = 0, int h = 0) {
-        std::fprintf(parityTrace_,
-                     "%ld,%s,%d,%s,%d,%d,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d,%d,%d,%d,%d\n",
-                     parityTraceTick_, kind, serial, id ? id : "-",
-                     state, hp, x, y, vx, vy, a, b, c, d, e, f, g, h);
-    };
-
-    writeRow("camera", 0,
-             activeCameraSectionId_.empty() ? "-" : activeCameraSectionId_.c_str(),
-             bossLocked_ ? 1 : 0, 0, camera_.x(), camera_.y(), 0.0f, 0.0f,
-             stageClear_ ? 1 : 0, stageClearTimer_, gameOver_ ? 1 : 0, paused_ ? 1 : 0);
-
-    const std::string playerWeapon =
-        player_.weaponInventory.isBuster() ? "buster" : player_.weaponInventory.current().id;
-    writeRow("player", 0, playerWeapon.c_str(),
-             static_cast<int>(player_.state()), player_.health,
-             player_.position.x, player_.position.y,
-             player_.velocity.x, player_.velocity.y,
-             player_.progressState().maxHealth, player_.iframeTimer(),
-             player_.facingRight ? 1 : 0, player_.lives,
-             player_.renderFrameIndexForTest(), player_.chargeLevel(),
-             player_.chargeTimer(), player_.weaponInventory.currentIndex);
-    writeRow("player_hp", 0, "-", player_.deathTimer(), player_.health,
-             player_.position.x, player_.position.y,
-             player_.velocity.x, player_.velocity.y,
-             player_.progressState().maxHealth, player_.iframeTimer(), player_.isDead() ? 1 : 0, 0);
-
-    const auto& apu = AudioManager::apuLog();
-    while (parityApuLogIndex_ < apu.size()) {
-        const auto& event = apu[parityApuLogIndex_++];
-        writeRow("audio_apu", event.frame, "-", event.command, 0,
-                 player_.position.x, player_.position.y, 0.0f, 0.0f,
-                 event.command, 0, 0, 0);
-    }
-    const auto& sfx = AudioManager::sfxLog();
-    while (paritySfxLogIndex_ < sfx.size()) {
-        const auto& event = sfx[paritySfxLogIndex_++];
-        writeRow("audio_sfx", event.frame, "-", event.id, 0,
-                 player_.position.x, player_.position.y, 0.0f, 0.0f,
-                 event.id, 0, 0, 0);
-    }
-
-    for (const auto& p : projectiles_) {
-        if (!p.active || p.dormantFrames > 0) continue;
-        writeRow("projectile", p.serial, p.weaponId.empty() ? "-" : p.weaponId.c_str(),
-                 static_cast<int>(p.type), p.damage, p.position.x, p.position.y,
-                 p.vx, p.vy, p.isPlayerShot ? 1 : 0,
-                 p.isShatterFragment ? 1 : 0, p.ageFrames, p.facingRight ? 1 : 0);
-    }
-    gameplay_buster_impact::writeParityTraceRows(busterImpacts_, writeRow);
-    for (const auto& e : enemies_) {
-        const AABB eb = e.getHitbox();
-        writeRow("enemy", e.serial, e.type.c_str(), static_cast<int>(e.enemyState), e.health,
-                 eb.x + eb.w * 0.5f, eb.y + eb.h * 0.5f,
-                 e.velocity.x, e.velocity.y, e.active ? 1 : 0,
-                 e.alive ? 1 : 0, e.deathTimer, e.deathBurstNodeCount());
-    }
-
-    if (bossActive_) {
-        const AABB bb = boss_.getHitbox();
-        writeRow("boss", 0, boss_.type.c_str(), static_cast<int>(boss_.bossState), boss_.health,
-                 bb.x + bb.w * 0.5f, bb.y + bb.h * 0.5f,
-                 boss_.velocity.x, boss_.velocity.y, boss_.active ? 1 : 0,
-                 boss_.isDead() ? 1 : 0, boss_.deathTimer(), bossLocked_ ? 1 : 0,
-                 boss_.displayHealth(), boss_.introVisible() ? 1 : 0,
-                 boss_.introSourceTick(), static_cast<int>(boss_.cpState()));
-    }
-
-    for (size_t i = 0; i < stageObjects_.size(); ++i) {
-        const auto& obj = stageObjects_[i];
-        const AABB ob = obj.getHitbox();
-        writeRow("stage_object", static_cast<int>(i), obj.id().c_str(),
-                 obj.animationFrameIndexForTest(), obj.contactDamage(),
-                 ob.x + ob.w * 0.5f, ob.y + ob.h * 0.5f, 0.0f, 0.0f,
-                 obj.active ? 1 : 0, obj.canBeDamagedByPlayerShots() ? 1 : 0,
-                 obj.sourceOid(), 0);
-    }
-
-    for (size_t i = 0; i < pickups_.size(); ++i) {
-        const auto& p = pickups_[i];
-        writeRow("pickup", static_cast<int>(i),
-                 p.persistentId.empty() ? "-" : p.persistentId.c_str(),
-                 static_cast<int>(p.type), p.value, p.position.x, p.position.y,
-                 0.0f, p.vy, p.active ? 1 : 0, p.onGround ? 1 : 0, p.lifetime, 0);
-    }
-
-    for (const auto& orb : gameplay_death_orbs::traceOrbs(deathOrbState_)) {
-        writeRow("fx", 0, "death_orb", orb.animFrame, orb.lifetime,
-                 orb.x, orb.y, orb.vx, orb.vy, 0, 0, 0, 0);
-    }
-    for (const auto& b : iceTrailBits_) {
-        writeRow("fx", b.serial, b.kind == 0 ? "ice_trail" : "ice_debris",
-                 b.age, b.lifetime, b.x, b.y, b.vx, b.vy,
-                 b.kind, b.hflip ? 1 : 0, 0, 0);
-    }
-    for (const auto& puff : torpedoPuffs_) {
-        writeRow("fx", puff.ownerSerial, "torpedo_puff", puff.age, 0,
-                 puff.x, puff.y, 0.0f, 0.0f, 0, 0, 0, 0);
-    }
-
-    const std::string stage = activeStageId_.str();
     const int transitionState = parityRoomTransitionTimer_ > 0 ? 2 : (stageClear_ ? 1 : 0);
     const int transitionTimer = parityRoomTransitionTimer_ > 0
         ? parityRoomTransitionTimer_
         : stageClearTimer_;
-    writeRow("transition", 0, stage.c_str(), transitionState, 0,
-             player_.position.x, player_.position.y, 0.0f, 0.0f,
-             transitionTimer, bossLocked_ ? 1 : 0, returnToStageSelect_ ? 1 : 0,
-             returnToTitle_ ? 1 : 0);
+    const gameplay_trace::ParityFrameState traceState{
+        activeCameraSectionId_, activeStageId_, bossLocked_, stageClear_, stageClearTimer_,
+        gameOver_, paused_, transitionState, transitionTimer,
+        returnToStageSelect_, returnToTitle_,
+    };
+    const auto deathOrbs = gameplay_death_orbs::traceOrbs(deathOrbState_);
+    const auto writeBusterImpactRows = [this](auto& writeRow) {
+        gameplay_buster_impact::writeParityTraceRows(busterImpacts_, writeRow);
+    };
+    gameplay_trace::writeParityFrame(
+        parityTrace_, parityTraceTick_, camera_, traceState, player_,
+        projectiles_, enemies_, bossActive_, boss_, stageObjects_, pickups_,
+        deathOrbs, iceTrailBits_, torpedoPuffs_, writeBusterImpactRows,
+        parityApuLogIndex_, paritySfxLogIndex_);
 
     std::fflush(parityTrace_);
 }

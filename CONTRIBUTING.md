@@ -16,9 +16,28 @@ cd megaman-x-engine
 git switch -c task/<short-name>
 ```
 
-Read `AGENTS.md` and `docs/architecture.md`, choose one task, and inspect the
+Read `docs/architecture.md`, choose one task, and inspect the
 relevant source and existing tests before changing anything. Keep the patch
 small enough for a human reviewer to understand in one pass.
+
+## Follow an existing ownership boundary
+
+For an input or binding change, start with the action rather than a raw raylib
+key. `InputBindings` owns stable action names, defaults, labels and duplicate
+rejection; `Input` turns the current bindings into held and latched action
+states; settings persists bindings; scenes and entities query actions. Do not
+put a new physical-key policy in a caller that consumes an action.
+
+The relevant public checks are:
+
+```sh
+cmake --build build --target input_bindings_contract_test settings_contract_test
+ctest --test-dir build -R '^(input-bindings|settings)\.contract$' --output-on-failure
+```
+
+Run the settings contract when the change crosses saved configuration. These
+contracts establish only their documented binding and persistence behavior;
+they do not require or prove a playable content runtime.
 
 ## Public starter tasks
 

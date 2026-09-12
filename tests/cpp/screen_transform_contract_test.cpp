@@ -5,8 +5,8 @@
 // INTERNAL_WIDTH=256, INTERNAL_HEIGHT=224):
 //   1. invalid window dimensions (zero/negative) yield an empty viewport and
 //      a not-inside point without opening a window;
-//   2. displayAspect is exactly 4:3 (aspect43=true) or the native 256:224
-//      ratio (aspect43=false);
+//   2. displayAspect is 4:3 (aspect43=true) or the native 256:224 ratio
+//      (aspect43=false);
 //   3. windows matching the target aspect map the full window with zero
 //      margins (640x480 under 4:3, 1024x896 under the native ratio);
 //   4. windows wider than the target pillarbox: height fills, width is
@@ -78,6 +78,32 @@ void testExactAspectWindowsFillWithNoMargins() {
     assert(kClose(native.y, 0.0f));
     assert(kClose(native.width, 1024.0f));
     assert(kClose(native.height, 896.0f));
+
+    // Band boundary for the exact-ratio fast path (relative epsilon 1e-5):
+    // a window just inside the band takes the full-window path, a window
+    // just outside it takes the unchanged letterbox/pillarbox path.
+    // 960x720 is exactly 4:3; widening it by ~5e-6 relative stays inside
+    // the band, so the viewport must be the full window (no fit math).
+    const float nearExactWidth = 960.0f * (1.0f + 5e-6f);
+    const mmx::screen_transform::InternalViewport nearExact =
+        mmx::screen_transform::internalViewportForWindow(
+            nearExactWidth, 720.0f, true);
+    assert(kClose(nearExact.x, 0.0f));
+    assert(kClose(nearExact.y, 0.0f));
+    assert(kClose(nearExact.width, nearExactWidth));
+    assert(kClose(nearExact.height, 720.0f));
+
+    // Widening by ~5e-4 relative lands outside the 1e-5 band, so the
+    // pillarbox path must still apply: width = 720*4/3 = 960,
+    // centered => (960.48 - 960)/2 = 0.24 px margins.
+    const float outsideBandWidth = 960.0f * (1.0f + 5e-4f);
+    const mmx::screen_transform::InternalViewport outsideBand =
+        mmx::screen_transform::internalViewportForWindow(
+            outsideBandWidth, 720.0f, true);
+    assert(kClose(outsideBand.x, (outsideBandWidth - 960.0f) * 0.5f));
+    assert(kClose(outsideBand.y, 0.0f));
+    assert(kClose(outsideBand.width, 960.0f));
+    assert(kClose(outsideBand.height, 720.0f));
 }
 
 void testWideWindowsPillarboxWithEqualHorizontalMargins() {

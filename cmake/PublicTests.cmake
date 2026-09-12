@@ -97,6 +97,9 @@ mmx_public_add_json_contract(settings_contract_test settings.contract
     "${MMX_PUBLIC_SOURCE_ROOT}/src/data/json_io.cpp"
     "${MMX_PUBLIC_SOURCE_ROOT}/src/data/difficulty.cpp"
     "${MMX_PUBLIC_SOURCE_ROOT}/src/app/input_bindings.cpp")
+mmx_public_add_json_contract(json_io_contract_test json-io.contract
+    "${MMX_PUBLIC_SOURCE_ROOT}/tests/cpp/json_io_contract_test.cpp"
+    "${MMX_PUBLIC_SOURCE_ROOT}/src/data/json_io.cpp")
 
 mmx_public_add_contract(input_bindings_contract_test input-bindings.contract
     "${MMX_PUBLIC_SOURCE_ROOT}/tests/cpp/input_bindings_contract_test.cpp"

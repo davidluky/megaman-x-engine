@@ -79,8 +79,8 @@ bool Player::loadFromFile(const std::string& path) {
 
         // Damage
         hurtKnockbackX   = j.value("hurtKnockbackX", 138.0f / 256.0f);
-        hurtKnockbackY   = j.value("hurtKnockbackY", -1.0f);
-        hurtDuration      = j.value("hurtDuration", 29);
+        hurtKnockbackY   = j.value("hurtKnockbackY", -2.0f);
+        hurtDuration      = j.value("hurtDuration", 30);
         iframeDuration    = j.value("iframeDuration", 91);
 
         if (j.contains("armorDeltas") && j["armorDeltas"].is_object()) {
@@ -277,7 +277,7 @@ void Player::setupAnimations() {
     anim_.addAnimation("crouch_shoot", {"crouch_shoot", {{58, 4}, {59, 4}}, true});
     anim_.addAnimation("shoot",        {"shoot",        {{60, 4}, {61, 4}}, false});
     // See knowledge_base/mmx1/player/hurt_visual.json. These visual ticks
-    // preserve the separately measured 29-tick reaction/28-step knockback.
+    // are retained source layouts; hurt_entry_2026-09-19 owns motion timing.
     Animation hurt{"hurt", {}, false};
     for (int frame = 80; frame <= 108; ++frame) hurt.frames.push_back({frame, 1});
     anim_.addAnimation("hurt", std::move(hurt));

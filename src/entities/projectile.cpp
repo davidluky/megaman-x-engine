@@ -178,6 +178,39 @@ bool Projectile::usesOneHitPerTargetGate() const {
     return piercing && !continuousDamage;
 }
 
+void Projectile::configureSourceChargeL1(float playerRamX, float playerRamY, Vector2 muzzleOffset) {
+    sourceChargeMuzzleOffset = muzzleOffset;
+    // charge_l1_birth/contact_phase_2026-09-17.json: source writes integer words.
+    sourceChargeL1Law = true;
+    const float direction = facingRight ? 1.0f : -1.0f;
+    sourceCollisionCenterOffset = Vector2{hitboxSize.x * 0.5f, hitboxSize.y * 0.5f};
+    position = {std::floor(playerRamX) + direction * sourceChargeMuzzleOffset.x
+                    - sourceCollisionCenterOffset->x,
+                std::floor(playerRamY) + sourceChargeMuzzleOffset.y
+                    - sourceCollisionCenterOffset->y};
+    prevPosition = position;
+    speed = source_charge_l1::kFlightStepPx;
+    vx = direction * speed;
+    vy = 0;
+}
+
+void Projectile::followSourceChargeL1(float playerRamX) {
+    if (!sourceChargeL1Law || !sourceCollisionCenterOffset ||
+        ageFrames >= source_charge_l1::kLaunchFrame) return;
+    position.x = std::floor(playerRamX) + (facingRight ? 1.0f : -1.0f) *
+        sourceChargeMuzzleOffset.x - sourceCollisionCenterOffset->x;
+}
+
+std::optional<source_charge_l1::HitProfile> Projectile::sourceChargeHitProfile() const {
+    if (!sourceChargeL1Law || !isPlayerShot || weaponId != "buster" ||
+        type != ProjectileType::ChargeL1) {
+        return std::nullopt;
+    }
+    // update() advances ageFrames before the scene resolves contact, so the
+    // claim frame arrives here as ageFrames 1 = source frame 0 of the life.
+    return source_charge_l1::profileForFrame(ageFrames > 0 ? ageFrames - 1 : 0);
+}
+
 bool Projectile::shouldConsumeAfterEnemyHit(bool killedEnemy) const {
     if (type == ProjectileType::ChargeL1 && weaponId == "buster") {
         return !killedEnemy;
@@ -211,6 +244,11 @@ void Projectile::init(float x, float y, float inVX, float inVY, ProjectileType p
     // Monotonic id so traces/tests can follow one projectile across the
     // compacting projectiles_ vector (Task-17 ghost proof).
     serial = ++s_nextSerial;
+    sourceCollisionCenterOffset.reset();
+    sourceChargeL1Law = false;
+    sourceChargeMuzzleOffset = {source_charge_l1::kClaimAnchorOffsetX, source_charge_l1::kClaimAnchorOffsetY};
+    sourceAxeMaxLog = false;
+    advancedForEnemyShotPhase = false;
     position = {x, y};
     prevPosition = position;
     type = ptype;
@@ -656,10 +694,18 @@ void Projectile::update(float /*dt*/) {
     // cap the stored velocity. A capped shot moves 6.25 px and stores 6.
     const bool normalBuster = isPlayerShot && weaponId == "buster" &&
                               type == ProjectileType::Normal;
-    if (normalBuster) vx += facingRight ? 0.25f : -0.25f;
-    position.x += vx;
-    position.y += vy;
-    if (normalBuster) vx = std::clamp(vx, -6.0f, 6.0f);
+    if (sourceChargeL1Law && sourceChargeHitProfile()) {
+        // charge_l1_birth_2026-09-17.json: live words hold for ten frames,
+        // then advance six pixels, including the first flight update.
+        const float direction = vx == 0 ? (facingRight ? 1.0f : -1.0f)
+                                        : (vx > 0 ? 1.0f : -1.0f);
+        position.x += direction * source_charge_l1::stepPxForFrame(ageFrames - 1);
+    } else {
+        if (normalBuster) vx += facingRight ? 0.25f : -0.25f;
+        position.x += vx;
+        position.y += vy;
+        if (normalBuster) vx = std::clamp(vx, -6.0f, 6.0f);
+    }
 
     // U219: ARM L3 helix uses source bullet y-offset tables for the first
     // visible/damaging window. Long misses repeat the measured 24f cadence.

@@ -10,6 +10,7 @@ constexpr int kUseParityReplayFrameCap = -1;
 
 constexpr Profile kProfiles[] = {
     {"walk", 420, false, Setup::Gameplay},
+    {"gates", 560, false, Setup::Gameplay},   // T1.1b: through door two
     {"shoot", 600, false, Setup::Gameplay},
     {"combat", 900, false, Setup::Gameplay},
     {"weapons", 760, true, Setup::Gameplay},

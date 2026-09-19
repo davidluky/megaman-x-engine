@@ -18,6 +18,7 @@
 #include "gameplay/gameplay_enemies.h"
 #include "gameplay/gameplay_enemy_contact.h"
 #include "entities/player_anchor.h"
+#include "entities/player_source_terrain.h"
 #include "entities/boss_cp_intro_timeline.h"
 #include "app/scene_manager.h"
 #include "ui/title_scene.h"
@@ -36,6 +37,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <filesystem>
 #include <memory>
 #include <utility>
 
@@ -174,7 +176,18 @@ void GameplayScene::renderStormEaglePlatforms(float alpha, float cameraX,
 }
 
 void GameplayScene::onEnter() {
+    fmGate_ = {};
     activeStageId_ = stageId.empty() ? stage_identity::fromPath(stagePath) : stageId;
+    // Resolve file identity once: absolute/dotted paths must use the same
+    // canonical adapter, while separate custom maps/characters remain generic.
+    fmCanonicalAssets_ = false;
+    if (activeStageId_.str() == "flame-mammoth") {
+        std::error_code error;
+        fmCanonicalAssets_ = std::filesystem::equivalent(
+            stagePath, "content/x1/stages/tiles/flame-mammoth_full.json", error) &&
+            std::filesystem::equivalent(
+                characterPath, "content/x1/characters/x.json", error);
+    }
     parityRoomTransitionTimer_ = 0;
     cpCapsule_.reset();
     stormEagleCapsule_.reset();
@@ -355,7 +368,7 @@ void GameplayScene::onEnter() {
     // do not carry named boss-room trigger data.
     if (arenaWaveMode_ && arenaWaveBoss_.has_value()) {
         initBossFromSpawn(*arenaWaveBoss_);
-    } else {
+    } else if (!fmGateScope()) {
         for (const auto& sp : tilemap_.spawns()) {
             if (sp.type == "boss" && !sp.id.empty()) {
                 initBossFromSpawn(sp);
@@ -567,6 +580,11 @@ void GameplayScene::spawnEnemyFromSpawn(const SpawnPoint& sp) {
     }
     e.setTarget(&player_);
     e.setTilemap(&tilemap_);
+    if (!randomizerMode && !bossRushMode && !arenaWaveMode_ &&
+        activeStageId_.str() == "chill-penguin" && sp.id == "walker" &&
+        ((sp.x == 579.0f && sp.y == 1167.0f) ||
+         (sp.x == 787.0f && sp.y == 1199.0f) ||
+         (sp.x == 881.0f && sp.y == 1139.0f))) e.configureSourceWalker();
     enemies_.push_back(std::move(e));
 }
 
@@ -584,6 +602,14 @@ void GameplayScene::initBossFromSpawn(const SpawnPoint& sp) {
     if (sp.type != "boss" || sp.id.empty()) return;
 
     boss_.init(sp.id, sp.x, sp.y);
+    if (fmGateScope() && sp.id == "flame-mammoth") {
+        // movie_anchor_ship_2026-09-18.json is the source actor center.
+        // projectile_hurtbox.json: body bottom = source Y+32; native render
+        // and physics use hitbox center/bottom, not the raw top-left position.
+        boss_.position.x = sp.x - boss_.hitboxOffset.x - boss_.hitboxSize.x * 0.5f;
+        boss_.position.y = sp.y + 32.0f - boss_.hitboxOffset.y - boss_.hitboxSize.y;
+        boss_.prevPosition = boss_.position;
+    }
     // CP-B1A is an explicit canonical-stage bridge. Requiring both stage
     // identity and the authenticated full-stage spawn keeps randomizer,
     // Bloody Palace, and compact legacy instances on their own geometry.
@@ -741,15 +767,6 @@ void GameplayScene::spawnEnemies() {
             const auto countBefore = enemies_.size();
             spawnEnemyFromSpawn(sp);
             if (enemies_.size() == countBefore) continue;
-            if (!randomizerMode && !bossRushMode &&
-                sp.activation == SpawnActivation::SourceHorizontalCameraBucket) {
-                // R112 / oid_0x49/creation.json: retain serial/order, but the
-                // source object does not exist before its descriptor event.
-                auto& enemy = enemies_.back();
-                enemy.active = false;
-                enemy.cameraActivated = false;
-                pendingSourceEnemySerials_.push_back(enemy.serial);
-            }
             // R72 camera_return.json: only the two authenticated, authored
             // CP bodies opt in. Extra spawns and arena waves use the helper
             // without acquiring this stage-placement lifecycle.
@@ -760,6 +777,16 @@ void GameplayScene::spawnEnemies() {
                 activeStageId_.str() == "chill-penguin" &&
                 sp.id == "axemax" && cpAxePlacement) {
                 enemies_.back().configureCpCameraReturn();
+            }
+            if (!randomizerMode && !bossRushMode &&
+                (sp.activation == SpawnActivation::SourceHorizontalCameraBucket ||
+                 enemies_.back().hasSourceWalker() || enemies_.back().sourceCreationOrigin())) {
+                // R112 / oid_0x49/creation.json: retain serial/order, but the
+                // source object does not exist before its descriptor event.
+                auto& enemy = enemies_.back();
+                enemy.active = false;
+                enemy.cameraActivated = false;
+                pendingSourceEnemySerials_.push_back(enemy.serial);
             }
         } else if (StageObject::isStageObjectSpawn(sp)) {
             spawnStageObjectFromSpawn(sp);
@@ -1084,7 +1111,7 @@ void GameplayScene::handleInput() {
         dismissGameOverPassword();
         return;
     }
-    if (paused_ || stageClear_) return;
+    if (paused_ || stageClear_ || fmGate_.locked()) return;
     if (stageStartControlsLockedForNextFrame()) return;
     if (capsuleControlsLocked()) return;
     player_.handleInput();
@@ -1140,6 +1167,12 @@ void GameplayScene::update(float dt) {
         bossActive_ = false;
         bossLocked_ = false;
         projectiles_.clear();
+        stretchBirdShots_ = {};
+        deckTurretShots_ = deck_turret_shot::Child13Pool{};
+        madPeckerShots_ = mad_pecker_shot::PoolController{};
+        deckTurretEffects_ = {};
+        stretchBirdShotParents_ = {};
+        stretchBirdShotAnimation_ = {};
         busterImpacts_.clear();
         enemies_.clear();
         pickups_.clear();
@@ -1228,6 +1261,12 @@ void GameplayScene::update(float dt) {
     // Canonical Storm Eagle support is handed to Player before its action
     // update. Allocation and initialization consume separate source ticks;
     // motion/contact are deferred until after player/tile physics below.
+    if (fmGate_.locked()) {
+        advanceFmGate();
+        updateFmGateCamera();
+        finishFmGateFrame();
+        return;
+    }
     const bool stormEaglePlatformActive =
         prepareStormEaglePlatformFrame();
 
@@ -1256,7 +1295,8 @@ void GameplayScene::update(float dt) {
                int tileX, int tileY, int rowOffset, float feetX,
                float /*linearSurfaceY*/) -> std::optional<float> {
             const bool grounded =
-                (player_.state() == PlayerState::Idle || player_.state() == PlayerState::Run) &&
+                (player_.state() == PlayerState::Idle || player_.state() == PlayerState::Run ||
+                 player_.state() == PlayerState::Dash) &&
                 (actor.onGround || actor.wasOnGround);
             const bool firstLanding = player_.state() == PlayerState::Fall &&
                 !actor.wasOnGround && !actor.onGround && !actor.onCeiling &&
@@ -1276,7 +1316,9 @@ void GameplayScene::update(float dt) {
                 (rawAttr == 0x06 && slope.leftY == 12 && slope.rightY == 8) ||
                 (rawAttr == 0x07 && slope.leftY == 8 && slope.rightY == 4) ||
                 (rawAttr == 0x08 && slope.leftY == 4 && slope.rightY == 0);
-            if (!profile || *profile != SourceContactProfile::NormalA552 ||
+            // dash_quarter_slope_floor_2026-09-17.json: BB38 has the same floor extent.
+            if (!profile || (*profile != SourceContactProfile::NormalA552 &&
+                             *profile != SourceContactProfile::ActiveDashBB38) ||
                 !authoredCpQuarter) {
                 return std::nullopt;
             }
@@ -1298,12 +1340,28 @@ void GameplayScene::update(float dt) {
     // Preserve horizontal ramp clearance without adding a grounded step-up
     // to its first vertical integration (left control otherwise rises 2px extra).
     const bool allowSlopeStepUp = !player_.sourceWalkJumpLaunching();
-    if (holdStormEagleSupport) {
+    if (player_.hurtEntryFrame()) {
+        // 81:8664..86A2 initializes recoil and returns before movement.
+        player_.prevPosition = player_.position;
+    } else if (moveFmGateApproach()) {
+        // The measured A552 grounded probes own this local step. No tile
+        // passability mask or change to Player's global hitbox is involved.
+    } else if (player_.sourceObjectDepartureFrame()) {
+        // T1.7i: source Run -> Fall returns before either position integration.
+        player_.prevPosition = player_.position;
+    } else if (holdStormEagleSupport) {
         physics::moveAndResolveXOnly(player_, tilemap_, cpEntryPassable);
     } else if (bossEntryShutterPassable_) {
         physics::moveAndCollide(player_, tilemap_, cpEntryPassable, sourceGroundSurface, allowSlopeStepUp);
-    } else {
+    } else if (!player_source_terrain::tryMoveHurtQuarter(player_, tilemap_) &&
+               !player_source_terrain::tryMoveGroundedFlat(player_, tilemap_) &&
+               !player_source_terrain::tryMoveAirborne(player_, tilemap_)) {
         physics::moveAndCollide(player_, tilemap_, {}, sourceGroundSurface, allowSlopeStepUp);
+    }
+    if (beginFmGateContact()) {
+        updateFmGateCamera();
+        finishFmGateFrame();
+        return;
     }
     // chill_penguin_ground_contact.json landingContinuationRows: the raw8
     // exit and its first raw3B flat placement both write only the integer Y.
@@ -1341,6 +1399,11 @@ void GameplayScene::update(float dt) {
     applyAutotestPlayerPositionLock();
     resolvePlayerAxeMaxStackCollision();
     checkStormEagleDashBreak();
+
+    // Source OID03 children dispatch before their OID04 parents.
+    updateStretchBirdShots();
+    updateDeckTurretShots();
+    updateMadPeckerShots();
 
     // Enemies
     updateEnemies();
@@ -1477,13 +1540,25 @@ void GameplayScene::update(float dt) {
     // 70px render-cell center (position+35) is a third, distinct quantity.
     // CP-B1C-C1 pins all three without a tolerance (plan task B1).
     const auto previousCameraX = sourceCameraCoordinate(camera_.baseX());
-    camera_.update(
+    if (fmGateScope() &&
+        !(fmGate_.phase == flame_mammoth_gates::Phase::Released && bossLocked_) &&
+        (fmGate_.cameraActive ||
+        (player_.position.x + 32 >= 7360 && player_.position.x + 32 <= 7416 &&
+         player_.position.y + 40 >= 624 && player_.position.y + 40 <= 671))) {
+        updateFmGateCamera();
+    } else camera_.update(
         playerCameraAnchorX(),
         player_.position.y + player_.spriteHeight / 2,
         player_.facingRight
     );
 
     updateCpEntryCamera();
+    // source_entry.json: horizontal lock begins at source X 7296, before
+    // the later vertical selector. Preserve the existing vertical owner here.
+    if (fmGateScope() && !fmGate_.cameraActive &&
+        player_.position.x + 32 >= 7296 && player_.position.x + 32 < 7360 &&
+        player_.position.y + 40 >= 624 && player_.position.y + 40 <= 671)
+        camera_.setBaseXY(7168,camera_.baseY());
     activateSourceEnemiesAfterCamera(previousCameraX);
 
     // HUD
@@ -1640,6 +1715,7 @@ void GameplayScene::writeParityTrace() {
     if (!parityTrace_) return;
     ++parityTraceTick_;
     updateParityRoomTransitionSignal();
+
     const int transitionState = parityRoomTransitionTimer_ > 0 ? 2 : (stageClear_ ? 1 : 0);
     const int transitionTimer = parityRoomTransitionTimer_ > 0
         ? parityRoomTransitionTimer_
@@ -1674,10 +1750,10 @@ void GameplayScene::activateSourceEnemiesAfterCamera(std::uint16_t previousCamer
                 const auto it = std::find_if(enemies_.begin(), enemies_.end(),
                     [serial](const Enemy& enemy) { return enemy.serial == serial; });
                 if (it == enemies_.end()) return true;
+                const auto origin = it->sourceCreationOrigin().value_or(it->position);
                 if (!gameplay_enemies::sourceRightwardCameraBucketReached(
                         previousCameraX, cameraX, cameraY,
-                        sourceCameraCoordinate(it->position.x),
-                        sourceCameraCoordinate(it->position.y))) {
+                        sourceCameraCoordinate(origin.x), sourceCameraCoordinate(origin.y))) {
                     return false;
                 }
                 // Enemy update, physics and contact already finished this
@@ -1706,7 +1782,17 @@ void GameplayScene::updateEnemies() {
         }
 
         e.update(0);
-        physics::moveAndCollide(e, tilemap_);
+        if (!e.hasSourceWalker() || e.velocity.x != 0 || e.velocity.y != 0) {
+            const float attemptedY = e.position.y + e.velocity.y;
+            physics::moveAndCollide(e, tilemap_);
+            e.finishSourceWalkerMotion(attemptedY);
+        } else {
+            e.savePosition();
+        }
+
+        if (e.consumeStretchBirdLaunch()) allocateStretchBirdShot(e);
+        if (e.consumeDeckTurretLaunch()) allocateDeckTurretShot(e);
+        if (e.consumeMadPeckerLaunch()) allocateMadPeckerShot(e);
 
         // Share the scene adapter with the compiled projectile contracts.
         gameplay_enemies::drainPendingShots(e, projectiles_);
@@ -1897,7 +1983,10 @@ void GameplayScene::updateProjectiles() {
             }
         }
 
-        p.update(0);
+        p.followSourceChargeL1(player_anchor::sourceRamAnchorX(
+            player_.position.x, player_.spriteWidth, player_.facingRight));
+        if (p.advancedForEnemyShotPhase) p.advancedForEnemyShotPhase = false;
+        else p.update(0);
 
         // Chameleon Sting: the muzzle bolt spawns its 3-dart fan at the
         // measured tick of its life (claim at muzzle age 20; darts hold one
@@ -2181,7 +2270,8 @@ void GameplayScene::checkBulletEnemyCollision() {
                 e.enemyState == EnemyState::Dead) continue;
 
             AABB eBox = e.getHitbox();
-            if (!pBox.overlaps(eBox)) continue;
+            const auto sourceContact = gameplay_enemy_contact::resolveSourceBusterEnemyContact(p,e);
+            if (!(sourceContact.sourceSupported ? sourceContact.hit : pBox.overlaps(eBox))) continue;
             if (p.usesOneHitPerTargetGate() && p.hasHitEnemySerial(e.serial)) continue;
 
             // Per-enemy damage tables — the real-MMX mechanism (lookup
@@ -2191,9 +2281,10 @@ void GameplayScene::checkBulletEnemyCollision() {
             if (p.isShatterFragment) form = enemy_damage::HitForm::Fragment;
             else if (p.type != ProjectileType::Normal) form = enemy_damage::HitForm::Charged;
             const auto defIt = Enemy::definitions.find(e.type);
-            const int dmg = (defIt != Enemy::definitions.end())
+            const int dmg = gameplay_enemy_contact::sourceBusterEnemyDamage(p, e).value_or(
+                (defIt != Enemy::definitions.end())
                 ? enemy_damage::damageFor(defIt->second, p.weaponId, form, p.damage)
-                : p.damage;
+                : p.damage);
 
             // A measured 0-damage pairing is a full PASS-THROUGH: no hit
             // flash, no projectile death (oracle 2026-06-10: e-spark crossed
@@ -2241,6 +2332,11 @@ void GameplayScene::checkBulletEnemyCollision() {
             }
 
             dispatchNormalBusterContactEffects(p, e.serial, eBox, damagedEnemy, killedEnemy);
+            if (gameplay_buster_impact::isTableWeaponContactEligible({
+                    p.type == ProjectileType::Normal, p.weaponId,
+                    damagedEnemy, killedEnemy})) {
+                spawnTableWeaponContactImpact(p, e.serial, eBox);
+            }
             if (p.shouldConsumeAfterEnemyHit(killedEnemy)) {
                 if (gameplay_buster_impact::isEligible({
                         p.type == ProjectileType::ChargeL1, p.weaponId,
@@ -2249,10 +2345,14 @@ void GameplayScene::checkBulletEnemyCollision() {
                 }
                 // Shotgun Ice shatters on ENEMY impact too — even when the
                 // enemy survives (oracle r5 f806: cannon at 6HP got the fan).
+                // NO impact burst here (T1.2a.3, 2026-09-15): at both Shotgun
+                // Ice boss hits of the Storm Eagle movie (drop frames 16159
+                // and 17898) the only palette-2 effect within 64 px of the
+                // pellet is the 16 x 16 contact square spawned above, and no
+                // tile unique to the cos_s2 composite appears. Fragments and
+                // the 0x78 shatter SFX stay.
                 if (p.shattersOnWallHit && !p.shatterSpecs.empty()) {
                     spawnShatterFragments(p);
-                    spawnImpactBurst(p.position.x + p.hitboxSize.x * 0.5f,
-                                     p.position.y + p.hitboxSize.y * 0.5f);
                     AudioManager::playApu(p.sfxShatter);
                 }
                 p.active = false;
@@ -2281,7 +2381,8 @@ void GameplayScene::checkPlayerEnemyCollision() {
 
     AABB playerBox = player_.getHitbox();
 
-    const bool canonicalX = characterPath == "content/x1/characters/x.json";
+    const bool canonicalX = fmCanonicalAssets_ ||
+        characterPath == "content/x1/characters/x.json";
 
     for (auto& e : enemies_) {
         if (!e.active || !e.cameraActivated ||
@@ -2298,7 +2399,6 @@ void GameplayScene::checkPlayerEnemyCollision() {
         // Determine knockback direction: push player away from enemy center
         float dir = (player_.position.x < e.position.x) ? -1.0f : 1.0f;
         player_.takeDamage(e.contactDamage, dir);
-        AudioManager::playApu(0x09);   // measured hurt cry (R6)
         camera_.shake(3.0f, 10);
         break; // Only take damage from one enemy per frame
     }
@@ -2322,7 +2422,6 @@ void GameplayScene::checkPlayerStageObjectCollision() {
         const float playerCenter = playerBox.x + playerBox.w * 0.5f;
         const float dir = (playerCenter < objectCenter) ? -1.0f : 1.0f;
         player_.takeDamage(obj.contactDamage(), dir);
-        AudioManager::playApu(0x09);   // measured hurt cry (R6)
         camera_.shake(3.0f, 10);
         break;
     }
@@ -2338,7 +2437,8 @@ void GameplayScene::checkEnemyShotPlayerCollision() {
         if (!p.active || p.isPlayerShot) continue; // Only check enemy shots
 
         AABB shotBox = p.getHitbox();
-        if (!playerBox.overlaps(shotBox)) continue;
+        const auto sourceContact = gameplay_enemy_contact::resolveSourceLogPlayerContact(p, player_);
+        if (sourceContact.sourceSupported ? !sourceContact.hit : !playerBox.overlaps(shotBox)) continue;
 
         if (consumeAbsorbShield()) {        // the shield eats the hit
             p.active = false;               // (s6_absorb: died near the
@@ -2347,7 +2447,6 @@ void GameplayScene::checkEnemyShotPlayerCollision() {
 
         float dir = (player_.position.x < p.position.x) ? -1.0f : 1.0f;
         player_.takeDamage(p.damage, dir);
-        AudioManager::playApu(0x09);   // measured hurt cry (R6)
         camera_.shake(2.0f, 8);
         p.active = false;
         break;
@@ -2554,9 +2653,15 @@ void GameplayScene::spawnSledDebris(const Projectile& sled) {
 
 void GameplayScene::spawnImpactBurst(float x, float y) {
     // Pellet shatter impact burst (WP-B cos_s2, $7E1928 records): composite
-    // animation at the shatter point on EVERY impact (terrain AND enemies),
-    // played from the offline-composed 64x64x21 strip. First 2 strip frames
-    // are empty, matching the oracle's spawn->first-sprite delay.
+    // animation at the shatter point, played from the offline-composed
+    // 64x64x21 strip. First 2 strip frames are empty, matching the oracle's
+    // spawn->first-sprite delay.
+    // No caller since T1.2a.3 (2026-09-15): plain terrain never drew it
+    // (weapon.json `$trigger_corrected`, run s5_face_burst) and the movie's
+    // own OAM at both Shotgun Ice enemy hits shows no piece unique to this
+    // composite — only the 16 x 16 contact square, which
+    // spawnTableWeaponContactImpact draws. Kept for the destructible-object
+    // case WP-B measured, which has no engine path yet.
     iceImpactBursts_.push_back({x, y, 0});
 }
 
@@ -3116,6 +3221,12 @@ void GameplayScene::handlePlayerDeath() {
             // Respawn enemies and clear projectiles/pickups/death orbs
             enemies_.clear();
             projectiles_.clear();
+            stretchBirdShots_ = {};
+            deckTurretShots_ = deck_turret_shot::Child13Pool{};
+            madPeckerShots_ = mad_pecker_shot::PoolController{};
+            deckTurretEffects_ = {};
+            stretchBirdShotParents_ = {};
+            stretchBirdShotAnimation_ = {};
             busterImpacts_.clear();
             pickups_.clear();
             gameplay_death_orbs::clearLiveOrbs(deathOrbState_);
@@ -3125,7 +3236,17 @@ void GameplayScene::handlePlayerDeath() {
             // boss should be dormant again until player re-enters the arena.
             // Arena-wave bosses are the exception: the wave owns a closed
             // arena, so the boss must reactivate immediately after respawn.
-            if (bossActive_) {
+            if (fmGateScope()) {
+                // The checkpoint re-enters record 1628; a released lane must
+                // not survive death and skip its next boss handover.
+                bossActive_ = false;
+                boss_.active = false;
+                bossLocked_ = false;
+                fmGate_ = {};
+                camera_.clearRoom();
+                camera_.unlock();
+                hud_.hideBossHP();
+            } else if (bossActive_) {
                 if (arenaWaveMode_ && arenaWaveBoss_.has_value()) {
                     initBossFromSpawn(*arenaWaveBoss_);
                 } else {
@@ -3181,7 +3302,6 @@ void GameplayScene::checkBossPlayerCollision() {
     if (playerBox.overlaps(bossBox)) {
         float dir = (player_.position.x < boss_.position.x) ? -1.0f : 1.0f;
         player_.takeDamage(boss_.contactDamage, dir);
-        AudioManager::playApu(0x09);   // measured hurt cry (R6)
         camera_.shake(4.0f, 12);
     }
 }
@@ -3584,6 +3704,8 @@ void GameplayScene::render(float alpha) {
     const WeaponGetActorDraw weaponGet = weaponGetActorDraw();
     player_.position.y += static_cast<float>(weaponGet.arenaOffsetY);
     player_.prevPosition.y += static_cast<float>(weaponGet.arenaOffsetY);
+    // OID23 source OAM: X wins all 281 measured child/Player overlap pixels.
+    renderMadPeckerShots(cx, cy);
     if (!warpHidingX && !weaponGet.hidePlayer && !cpCapsule_.active() &&
         !stormEagleCapsule_.visualActive() &&
         !gameplay_sting_chameleon_capsule::hidesOrdinaryPlayer(
@@ -3619,6 +3741,8 @@ void GameplayScene::render(float alpha) {
     renderTorpedoSmoke(cx, cy);
 
     // Projectiles
+    renderStretchBirdShots(cx, cy);
+    renderDeckTurretShots(cx, cy);
     for (auto& p : projectiles_) {
         if (!p.active) continue;
         Vector2 sp = p.position;
@@ -3842,6 +3966,231 @@ void GameplayScene::renderWarpIn(float cameraX, float cameraY) const {
                        {x, y, 70, 70},
                        {0, 0}, 0.0f, WHITE);
     }
+}
+
+// Source: gate_passage/{source_entry,walk_camera,animation,first_close}.json.
+// This adapter owns the measured grounded first-door path only.
+bool GameplayScene::fmGateScope() const {
+    return activeStageId_.str() == "flame-mammoth" &&
+        fmCanonicalAssets_ &&
+        !randomizerMode && !bossRushMode && !arenaWaveMode_;
+}
+
+// The retained checkpoint after the first gate is (7520,615), which is past
+// that gate's word 7416: a Player who enters the lane there has record 1658
+// behind them and record 1628 ahead.  Source: gate_passage/first_close.json's
+// release checkpoint and walk_camera.json route 1 (contact 7653).
+void GameplayScene::armFmGateRecord() {
+    using flame_mammoth_gates::Phase;
+    if (!fmGateScope() || fmGate_.phase != Phase::Waiting ||
+        fmGate_.subId != 4) return;
+    if (player_.position.x + 32 <= static_cast<float>(fmGate_.gateX)) return;
+    fmGate_.subId = 5;
+    fmGate_.approachCameraX = 7424;
+    fmGate_.cameraLockX = 7680;
+}
+
+bool GameplayScene::moveFmGateApproach() {
+    using flame_mammoth_gates::Phase;
+    armFmGateRecord();
+    const auto profile = player_.sourceContactProfile();
+    if (!fmGateScope() || fmGate_.phase != Phase::Waiting || !profile ||
+        *profile != SourceContactProfile::NormalA552 ||
+        (!player_.onGround && !player_.wasOnGround) || player_.velocity.x <= 0 ||
+        (player_.state() != PlayerState::Run && player_.state() != PlayerState::Idle))
+        return false;
+    const float sx = player_.position.x + 32;
+    const float sy = player_.position.y + 40;
+    const float nextX = sx + player_.velocity.x;
+    const float origin = static_cast<float>(fmGate_.originX());
+    if (sx < origin - 56 || nextX > origin || sy < 624 || sy > 671) return false;
+    // 8492AC positive A552 horizontal probes; the real source floor remains
+    // solid. This preflight publishes nothing unless every lookup is known.
+    for (const int dy : {-1,-10,8})
+        if (tilemap_.getRawAttrAtPixel(std::floor(nextX)+7, std::floor(sy)+dy) != 0)
+            return false;
+    const int floorY = static_cast<int>(std::floor(sy)) + 22;
+    if (tilemap_.getRawAttrAtPixel(std::floor(nextX), floorY) != 0x3B) return false;
+    player_.prevPosition = player_.position;
+    player_.position.x = nextX - 32;
+    // 8496B5 writes the integer Y only; keep the existing subpixel remainder.
+    player_.position.y += 6 - ((floorY & 15) + 1);
+    player_.velocity.y = 0;
+    player_.onGround = player_.wasOnGround = true;
+    player_.touchingWallLeft = player_.touchingWallRight = player_.onCeiling = false;
+    return true;
+}
+
+bool GameplayScene::beginFmGateContact() {
+    using flame_mammoth_gates::Phase;
+    armFmGateRecord();
+    if (!fmGateScope() || fmGate_.phase != Phase::Waiting || !player_.onGround ||
+        player_.state() != PlayerState::Run || player_.velocity.x <= 0) return false;
+    const auto profile = player_.sourceContactProfile();
+    if (!profile || *profile != SourceContactProfile::NormalA552) return false;
+    const int sx = static_cast<int>(std::floor(player_.position.x + 32));
+    const int sy = static_cast<int>(std::floor(player_.position.y + 40));
+    // 86:D8C7 gate offsets (0,0), half sizes (13,12); A552 Player contact
+    // offsets (0,-1), half sizes (6,14), inclusive 84:9D06 comparison.
+    if (std::abs(sx - static_cast<int>(fmGate_.originX())) > 19 ||
+        std::abs(sy - 1 - 647) > 26) return false;
+    const bool frozen = fmGate_.subId != 5 || tilemap_.mainTileId(479,39) == 0x159;
+    if (!flame_mammoth_gates::setGateBlocks(tilemap_,fmGate_.subId,true,frozen))
+        return false;
+    fmGate_.frozenBaseline = frozen;
+    fmGate_.phase = Phase::Open;
+    fmGate_.animation = flame_mammoth_gates::beginAnimation(false);
+    fmGate_.savedVelocityX = player_.velocity.x;
+    fmGate_.walk.xFixed = static_cast<std::uint32_t>(std::lround((player_.position.x+32)*256));
+    fmGate_.walk.yFixed = static_cast<std::uint32_t>(std::lround((player_.position.y+40)*256));
+    player_.velocity = {0,0};
+    return true;
+}
+
+void GameplayScene::advanceFmGate() {
+    using namespace flame_mammoth_gates;
+    player_.prevPosition = player_.position;
+    if (fmGate_.phase == Phase::Open) {
+        player_.tickAnimationOnly();
+        fmGate_.animation = advanceAnimation(fmGate_.animation);
+        if (fmGate_.animation.complete()) {
+            fmGate_.phase = Phase::Walk;
+            fmGate_.activeX() += 16;
+            // The actor sets new limits; camera then steps using old borders.
+            const std::uint16_t home = fmGate_.approachCameraX;
+            const std::uint16_t lock = fmGate_.cameraLockX;
+            fmGate_.walk.camera = cameraStep({0,home,home,home,home,lock,lock,2,8,128,128},
+                {static_cast<std::uint16_t>(fmGate_.walk.xFixed>>8),
+                 static_cast<std::uint16_t>(fmGate_.walk.xFixed>>8)});
+        }
+    } else if (fmGate_.phase == Phase::Walk) {
+        player_.tickAnimationOnly();
+        const auto step = advanceWalk(fmGate_.walk);
+        fmGate_.walk = step.state;
+        player_.position.x = fmGate_.walk.xFixed/256.0f-32;
+        if (step.beginClose) {
+            fmGate_.phase = Phase::Close;
+            fmGate_.animation = beginAnimation(true);
+            auto& close = fmGate_.close;
+            close = {};
+            close.xFixed = fmGate_.walk.xFixed;
+            close.yFixed = fmGate_.walk.yFixed;
+            close.xSubSpeed = 0x74;
+            close.weight = 0x40;
+            close.probeY = 0x10;
+            if (fmGate_.subId == 4) {
+                // first_close.json's initial state (frame 1183).
+                close.bd3 = 4;
+                close.attrY = 0x3B;
+            } else {
+                // second_close.json's initial state (frame 1576): the second
+                // record stands on a different terrain cell - bd3 0, attr 0,
+                // probe x 7 - and the close helper's selector needs them.
+                close.bd3 = 0;
+                close.attrY = 0;
+                close.probeX = 7;
+            }
+        }
+    } else if (fmGate_.phase == Phase::Close) {
+        const auto before = fmGate_.close;
+        const auto step = flame_mammoth_gate_close::advance(fmGate_.close,tilemap_);
+        if (!step) return;
+        const auto animation = advanceAnimation(fmGate_.animation);
+        if (animation.complete() &&
+            !setGateBlocks(tilemap_,fmGate_.subId,false,fmGate_.frozenBaseline)) return;
+        fmGate_.close = step->state;
+        if (animation.complete() && fmGate_.subId == 5) {
+            // second_release_owners.json frame_1660: "x_fixed equals F1659;
+            // the +128 fixed conveyor/ground step first appears at F1664, not
+            // in the release transaction." The record's clear/flags/saved
+            // xSubSpeed transaction applies; its floor movement does not.
+            fmGate_.close.xFixed = before.xFixed;
+            fmGate_.close.yFixed = before.yFixed;
+            // second_close.json release.player_x_sub_speed / the frame-1660
+            // completed state: the record restores the saved 0178, it is not
+            // the helper's computed step speed.
+            fmGate_.close.xSubSpeed = 0x0178;
+        }
+        fmGate_.animation = animation;
+        player_.tickAnimationOnly();
+        if (step->animationCommand == 0x22) player_.forceIdlePose();
+        player_.position = {fmGate_.close.xFixed/256.0f-32,
+                            fmGate_.close.yFixed/256.0f-40};
+        if (animation.complete()) {
+            fmGate_.activeX() += 1024;
+            fmGate_.phase = Phase::Released;
+            player_.velocity = {fmGate_.savedVelocityX,0};
+            player_.onGround = player_.wasOnGround = true;
+            if (fmGate_.subId == 4) {
+                checkpoint_ = {7520,615};
+                // walk_camera.json route 1: the approach to the second gate
+                // runs with the camera still at the first gate's lock.
+                fmGate_.phase = Phase::Waiting;
+                fmGate_.subId = 5;
+                fmGate_.approachCameraX = 7424;
+                fmGate_.cameraLockX = 7680;
+                fmGate_.animation = {};
+                fmGate_.close = {};
+            } else {
+                // second_release_owners.json, ordered owners 1 then 2: the
+                // gate record D=1628 clears the Player action, then the
+                // Mammoth event requests Player control in the SAME update.
+                // Flame Mammoth has no campaign boss spawn (bosses 2/8), so
+                // the request is emitted and observable and nothing is
+                // invented; the spawn arrives with Track 3's recording.
+                fmGate_.handoverRequested = true;
+                requestFmBossHandover();
+            }
+        }
+    }
+}
+
+// The canonical Mammoth map has no named boss room: the second gate owns
+// encounter creation and activation.
+void GameplayScene::requestFmBossHandover() {
+    if (!fmGateScope() || bossActive_) return;
+    for (const auto& sp : tilemap_.spawns()) {
+        if (sp.type == "boss" && sp.id == "flame-mammoth") {
+            initBossFromSpawn(sp);
+            // second_release_owners.json: this gate transfers to the boss.
+            // The canonical map has no named boss-room trigger. Release the
+            // door camera into the existing generic encounter; the measured
+            // Mammoth intro choreography remains a separate integration.
+            boss_.activate();
+            bossLocked_ = true;
+            gameplay_boss::syncBossHpBar(boss_, hud_);
+            AudioManager::playSFX(SFX::BossIntro);
+            AudioManager::playBGM("boss");
+            fmGate_.cameraActive = false;
+            break;
+        }
+    }
+}
+
+void GameplayScene::updateFmGateCamera() {
+    using flame_mammoth_gates::Phase;
+    if (!fmGateScope() || (fmGate_.phase == Phase::Released && bossLocked_)) return;
+    fmGate_.cameraActive = true;
+    // 80:E223 / E2D0 precede 81:F6DC: two retained state values, not a
+    // delay counted from a replay frame or an X-threshold interpolation.
+    const auto approach = [](int from, int to) { return from + std::clamp(to-from,-2,2); };
+    fmGate_.cameraY = approach(fmGate_.cameraY,fmGate_.bottom);
+    fmGate_.bottom = approach(fmGate_.bottom,fmGate_.selectedBottom);
+    const int sx = static_cast<int>(std::floor(player_.position.x+32));
+    const int sy = static_cast<int>(std::floor(player_.position.y+40));
+    if (sy >= 624 && sy <= 671) {
+        if (sx >= 7360 && sx <= 7390) fmGate_.selectedBottom = 543;
+        if (sx >= 7392 && sx <= 7422) fmGate_.selectedBottom = 512;
+    }
+    const int x = fmGate_.phase == Phase::Waiting || fmGate_.phase == Phase::Open
+        ? static_cast<int>(fmGate_.approachCameraX) : fmGate_.walk.camera.target;
+    camera_.setBaseXY(static_cast<float>(x),static_cast<float>(fmGate_.cameraY));
+}
+
+void GameplayScene::finishFmGateFrame() {
+    hud_.update(player_.health,player_.progressState().maxHealth,player_.lives);
+    writeProjTrace();
+    writeParityTrace();
 }
 
 } // namespace mmx

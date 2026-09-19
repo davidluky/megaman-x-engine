@@ -216,6 +216,8 @@ void Player::handleInput() {
 }
 
 void Player::update(float /*dt*/) {
+    sourceObjectDepartureFrame_ = false;
+    hurtEntryFrame_ = false;
     // Decrement timers
     if (coyoteTimer_ > 0) coyoteTimer_--;
     if (jumpBufferTimer_ > 0) jumpBufferTimer_--;
@@ -228,6 +230,8 @@ void Player::update(float /*dt*/) {
 
     if (shotCooldown_ > 0) shotCooldown_--;
     if (shootAnimTimer_ > 0) shootAnimTimer_--;
+
+    if (updateHurtTransition()) return;
 
     // CP-B1C-T1-M2: scripted boss-entry walk — the scene owns position.x;
     // only the run-animation clock advances here.
@@ -270,6 +274,8 @@ void Player::update(float /*dt*/) {
             case PlayerState::Die:       updateDie(); break;
         }
     }
+    if (hurtEntryFrame_) return;
+    sourceObjectDeparturePending_ = false;
 #ifdef WALL_DEBUG_LOG
     if (state_ == PlayerState::Fall || state_ == PlayerState::WallSlide ||
         state_ == PlayerState::WallJump || state_ == PlayerState::Jump) {
@@ -446,6 +452,10 @@ std::optional<float> Player::sourceGroundSpeed() const {
 void Player::changeState(PlayerState newState) {
     if (state_ == newState) return;
     const PlayerState oldState = state_;
+    if (newState != PlayerState::Hurt) {
+        hurtInitPending_ = false;
+        hurtRecoveryPending_ = false;
+    }
     if (newState != PlayerState::Jump && newState != PlayerState::Fall) {
         sourceJumpSpeed_.reset();
     }
@@ -504,6 +514,14 @@ void Player::changeState(PlayerState newState) {
             anim_.play("dash");
             break;
         case PlayerState::DashJump:
+            // T1.7 (Storm Eagle f2112): the rise-end zero fires once per
+            // dash-jump. fireGroundJump writes the launch speed before this
+            // call, so a launch arms it; an air dash entered while already
+            // falling has no rise left to end.
+            dashJumpRiseEnded_ = velocity.y > 0.0f;
+            // SE f2207/f7373/f7760 (2026-09-16): a dash-jump ends a running walk start,
+            // so X lands walking 376/256; a closed one (-1) is unmeasured, left alone.
+            if (walkStartTick_ >= 0) { walkStartTick_ = kWalkStartFrames; walkStartRamping_ = false; }
             AudioManager::playSFX(SFX::Jump);
             anim_.play("jump");
             break;
@@ -511,7 +529,9 @@ void Player::changeState(PlayerState newState) {
             velocity = {0.0f, 0.0f};
             anim_.play("wall");
             break;
-        case PlayerState::Hurt:      anim_.play("hurt"); break;
+        case PlayerState::Hurt:
+            if (!hurtInitPending_) anim_.play("hurt");
+            break;
         case PlayerState::Die:
             AudioManager::playSFX(SFX::PlayerDeath);
             spawnDeathBurst();
@@ -559,22 +579,26 @@ void Player::applyHorizontalInput() {
 
     facingRight = right;
 
-    // R4.1: a direction going from unheld to held opens the source's walk
-    // start. The capture cannot separate "frames standing still" from "frames
-    // with nothing held" because X stops on the frame the direction is
-    // released, so the counter is the held-input one.
+    // R4.1 idle starts ramp; landing dispatch bypasses idle (CP2047).
+    // Provenance: player/landing_walk_dispatch_2026-09-17.json.
     if (walkStartTick_ < 0) {
-        walkStartTick_ = 0;
-        walkStartRamping_ = onGround && walkStillFrames_ >= kWalkStartRampStill;
+        const bool landingWalk = onGround && landingAnimTimer_ > 0;
+        walkStartTick_ = landingWalk ? kWalkStartFrames : 0;
+        walkStartRamping_ = !landingWalk && onGround && walkStillFrames_ >= kWalkStartRampStill;
     }
     walkStillFrames_ = 0;
 
+    // T1.7: the ramp is a GROUND law. R4.1 measured it on Chill Penguin's
+    // floor and the first-held-frame zero above is already gated on onGround;
+    // Storm Eagle source frame 1383 (knowledge_base/_movies/storm-eagle,
+    // player.csv + _movie/Input.txt) has X airborne on the ramp's fifth frame,
+    // right held, advancing 2 px while the engine held him at 0.
     const bool walkStartRampActive =
-        walkStartRamping_ && walkStartTick_ < kWalkStartFrames;
+        onGround && walkStartRamping_ && walkStartTick_ < kWalkStartFrames;
     float speed = runSpeed;
     if (onGround && walkStartTick_ == 0) {
         speed = 0.0f;  // measured: the first held frame does not move
-    } else if (walkStartRamping_ && walkStartTick_ < kWalkStartFrames) {
+    } else if (walkStartRampActive) {
         speed = (walkStartTick_ == kWalkStartFrames - 1) ? 0.0f : kWalkStartRampSpeed;
     }
     if (walkStartTick_ < kWalkStartFrames) ++walkStartTick_;
@@ -589,7 +613,12 @@ void Player::applyHorizontalInput() {
     }
     // $819982 copies the retained Walk-jump magnitude with the current side
     // input sign. The neutral branch above clears effective velocity only.
-    if (!onGround && sourceJumpSpeed_ &&
+    // T1.7: a retained magnitude of ZERO is not a magnitude the source copies.
+    // Storm Eagle f1477 launches with the direction released on the press
+    // frame, and the capture build/t17-air (f1477..f1505) has X holding x for
+    // thirteen airborne frames and then stepping a flat -376/256 -- the walk
+    // speed, no ramp -- from f1491, the first frame that reads `left`.
+    if (!onGround && sourceJumpSpeed_ && *sourceJumpSpeed_ != 0.0f &&
         (state_ == PlayerState::Jump || state_ == PlayerState::Fall)) {
         speed = *sourceJumpSpeed_;
     }
@@ -753,14 +782,21 @@ void Player::updateIdle() {
 }
 
 void Player::updateRun() {
-    applyHorizontalInput();
+    const bool objectDeparture = sourceObjectDeparturePending_ && !onGround;
+    if (!objectDeparture) applyHorizontalInput();
 
     if (tryLadder()) return;
 
     if (tryDashJump()) return;
     if (tryDash()) return;
-    if (velocity.x == 0 && !walkStartActive()) { changeState(PlayerState::Idle); return; }
+    // SE f1477 (build/t17-idle): releasing right with B launches before Idle.
     if (tryJump()) return;
+    if (objectDeparture) {
+        changeState(PlayerState::Fall);
+        sourceObjectDepartureFrame_ = true;
+        return;
+    }
+    if (velocity.x == 0 && !walkStartActive()) { changeState(PlayerState::Idle); return; }
 
     if (!onGround) {
         coyoteTimer_ = coyoteFrames;
@@ -774,8 +810,13 @@ void Player::updateJump() {
     if (tryLadder()) return;
 
     // R36 source KB: ground_jump_release.json measures a rising B release as
-    // zero Y velocity before moveAndCollide applies gravity.
-    if (!inputJumpHeld_ && velocity.y < 0.0f) {
+    // zero Y velocity before moveAndCollide applies gravity. T1.7 (Chill
+    // Penguin f1551 -> f1552, build/t17-cp2) measures the same zero when the
+    // rise has already turned over: the release is read at +45/256 and the
+    // source's next displacement is +64/256, the bare gravity step, not
+    // +109/256. The sign is not part of the law; the Fall transition below
+    // keeps the zero from firing more than once per jump.
+    if (!inputJumpHeld_) {
         velocity.y = 0.0f;
     }
 
@@ -897,9 +938,18 @@ void Player::updateDashJump() {
     }
 
     // R32 source KB: dashjump_release.json measures a rising B release as
-    // zero Y velocity before moveAndCollide applies gravity.
-    if (!inputJumpHeld_ && velocity.y < 0.0f) {
+    // zero Y velocity before moveAndCollide applies gravity. T1.7 (Storm
+    // Eagle f2111 -> f2112, capture build/t17-se3) measures the other way a
+    // dash-jump's rise can end: with A, B and left held for the whole arc,
+    // the source's +45/256 is followed by +64/256 -- one bare gravity step
+    // from zero, not +109/256 -- and $7E0BBC turns 196 -> 209 on that frame.
+    // Either way the rise ends ONCE: from f2112 the steps are 64/256 again
+    // (+128, +192, +256), so the zero must not fire on every falling frame.
+    const bool riseTurnedOver = velocity.y > 0.0f;
+    const bool riseReleased = !inputJumpHeld_ && velocity.y < 0.0f;
+    if (!dashJumpRiseEnded_ && (riseTurnedOver || riseReleased)) {
         velocity.y = 0.0f;
+        dashJumpRiseEnded_ = true;
     }
 
     // Wall slide — only grab walls when falling, not during ascent.
@@ -1092,6 +1142,10 @@ void Player::respawnAt(Vector2 spawn, int invulnerableFrames, bool grounded) {
     shotCooldown_ = 0;
     shootAnimTimer_ = 0;
     hurtTimer_ = 0;
+    hurtInitPending_ = false;
+    hurtRecoveryPending_ = false;
+    hurtEntryFrame_ = false;
+    hurtKnockbackDirection_ = -1.0f;
     deathTimer_ = 0;
     deathNodes_.clear();
     iframeTimer_ = std::max(0, invulnerableFrames);
@@ -1106,61 +1160,6 @@ void Player::respawnAt(Vector2 spawn, int invulnerableFrames, bool grounded) {
         anim_.play("idle");
     } else {
         changeState(PlayerState::Fall);
-    }
-}
-
-void Player::takeDamage(int amount, float knockbackDirX) {
-    // Chameleon Sting charged state: TOTAL immunity — no HP loss, no
-    // knockback/hurt state, no iframes consumed, and the state is neither
-    // cancelled nor shortened by the hit (oracle s3_walk: pressed against a
-    // live walker at full HP; first damage landed at state-end+2).
-    if (stingInvincibleFrames > 0) return;
-    if (isInvulnerable()) return;
-
-    float dmg = amount * DifficultySettings::playerDamageMultiplier();
-    amount = std::max(1, static_cast<int>(dmg));
-    if (hasArmor) amount = std::max(1, (amount + 1) / 2);
-    health -= amount;
-
-    // Note: do NOT cancel the charge here. In MMX1 X keeps his charge when hit —
-    // the buster keeps charging through the hit-stun (David-confirmed behavior).
-
-    if (health <= 0) {
-        health = 0;
-        deathTimer_ = 0;
-        velocity = {0, 0};
-        changeState(PlayerState::Die);
-        return;
-    }
-
-    // Knockback: launch away from damage source
-    velocity.x = (knockbackDirX < 0) ? -hurtKnockbackX : hurtKnockbackX;
-    velocity.y = hurtKnockbackY;
-    hurtTimer_ = hurtDuration;
-    iframeTimer_ = iframeDuration;
-    changeState(PlayerState::Hurt);
-}
-
-void Player::forceDeath() {
-    health = 0;
-    deathTimer_ = 0;
-    velocity = {0, 0};
-    changeState(PlayerState::Die);
-}
-
-void Player::updateHurt() {
-    // Player has no control during hurt state — just coasts on knockback
-    // Gravity still applies (handled by moveAndCollide)
-    hurtTimer_--;
-
-    if (hurtTimer_ <= 0) {
-        // Regain control — transition based on current physics state
-        if (onGround) {
-            velocity.x = 0;
-            changeState(PlayerState::Idle);
-        } else {
-            changeState(PlayerState::Fall);
-        }
     }
 }
 
@@ -1465,20 +1464,20 @@ void Player::fireShot(ProjectileType type) {
     p.position.y = muzzleY - p.hitboxSize.y * 0.5f;
     p.prevPosition = p.position;
 
-    // WP-C anchor bridge (knowledge_base/_shotgun_ice_runs/anchor_idle/
-    // anchor_offset.json): the SNES player anchor ($7E0BAC/$7E0BB0) sits at
-    // Player::position + (kRightFacingSourceRamOffsetX, kAnchorDy) for the
-    // right-facing idle-pose visible-pixel bridge, constant over 120 frames;
-    // mirror x about the cell for left.
-    // Each projectile's RAM anchor sits at a measured offset from its own
-    // tile/visual center (Weapon::projCenterCorr — ice pellet (0,+4), spark
-    // ball (-3,+4)), and the engine draws projectile frames centered on the
-    // hitbox center, so the visual-exact center adds that correction.
+    // WP-C anchor_idle/anchor_offset.json maps the idle source anchor;
+    // projCenterCorr maps projectile RAM to its rendered hitbox center.
     constexpr float kAnchorDy = 37.0f;
     const auto sourceRamAnchorX = [&]() noexcept {
         return player_anchor::sourceRamAnchorX(
             position.x, spriteWidth, facingRight);
     };
+    if (weaponInventory.isBuster() && type == ProjectileType::ChargeL1) {
+        if (onGround && (state_ == PlayerState::Idle || state_ == PlayerState::Run))
+            p.configureSourceChargeL1(sourceRamAnchorX(), position.y + 40.0f);
+        // charge_l1_air_birth_and_walker_deaths_2026-09-17.json: CP f1807.
+        else if (!onGround && facingRight && state_ == PlayerState::Fall)
+            p.configureSourceChargeL1(sourceRamAnchorX(), position.y + 40.0f, {25.0f, -8.0f});
+    }
     if (weaponInventory.isBuster() && type == ProjectileType::Normal &&
         state_ == PlayerState::Idle && facingRight && onGround) {
         // knowledge_base/mmx1/weapons/buster/idle_spawn_x.json: the source
@@ -1487,6 +1486,11 @@ void Player::fireShot(ProjectileType type) {
         const float centerX = sourceRamAnchorX() + kIdleBusterSourceShotOffsetX;
         p.position.x = centerX - p.hitboxSize.x * 0.5f;
         p.prevPosition.x = p.position.x;
+        // normal_motion.json birth (16,-3) joined to
+        // chill_penguin_ground_contact.json source-to-native Y=-40.
+        // The legacy muzzle is an art center; retain it and tag the RAM center.
+        p.sourceCollisionCenterOffset = Vector2{
+            centerX - p.position.x, position.y + 40.0f - 3.0f - p.position.y};
     }
     if (weapon.hasMeasuredSpawn && !isCharged) {
         // KB spawn_offset is SNES-anchor -> projectile-RAM-anchor (mirrored

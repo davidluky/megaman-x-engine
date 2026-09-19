@@ -3,6 +3,7 @@
 
 #include "gameplay/gameplay_projectiles.h"
 #include "gameplay/gameplay_buster_impact.h"
+#include "gameplay/gameplay_enemy_contact.h"
 
 #include <algorithm>
 #include <cmath>
@@ -231,6 +232,8 @@ enemy_damage::HitForm hitFormForEnemyDamage(const Projectile& projectile) {
 }
 
 int damageToEnemy(const Projectile& projectile, const Enemy& enemy) {
+    if (const auto damage = gameplay_enemy_contact::sourceBusterEnemyDamage(projectile, enemy))
+        return *damage;
     const auto defIt = Enemy::definitions.find(enemy.type);
     if (defIt == Enemy::definitions.end()) return projectile.damage;
 
@@ -255,7 +258,8 @@ EnemyHitResult resolvePlayerShotEnemyHit(
 
     const AABB projectileBox = projectile.getHitbox();
     const AABB enemyBox = enemy.getHitbox();
-    if (!projectileBox.overlaps(enemyBox)) return result;
+    const auto source = gameplay_enemy_contact::resolveSourceBusterEnemyContact(projectile, enemy);
+    if (!(source.sourceSupported ? source.hit : projectileBox.overlaps(enemyBox))) return result;
     if (projectile.usesOneHitPerTargetGate() &&
         projectile.hasHitEnemySerial(enemy.serial)) {
         return result;
@@ -321,9 +325,7 @@ EnemyHitResult resolvePlayerShotEnemyHit(
     if (projectile.shouldConsumeAfterEnemyHit(result.killedEnemy)) {
         if (projectile.shattersOnWallHit && !projectile.shatterSpecs.empty()) {
             spawnShatterFragments(pending, projectile);
-            result.shatterImpact = true;
-            result.impactX = projectile.position.x + projectile.hitboxSize.x * 0.5f;
-            result.impactY = projectile.position.y + projectile.hitboxSize.y * 0.5f;
+            result.shatteredOnEnemyHit = true;
             result.shatterSfx = projectile.sfxShatter;
         }
         projectile.active = false;

@@ -117,6 +117,22 @@ void runFrame(std::string_view profile, int frame, const SnapFn& snap) {
             applyParityReplayFrame(ParityReplayFrame{}, true);
         }
 
+    } else if (profile == "gates") {
+        // T1.1 retained rightward replay, --spawn-at 7344,615. Snap both
+        // sides of passage; source-synchronized parity lives in the CTest.
+        // T1.1b extends it through the second door: from the retained
+        // checkpoint (7520,615) the second record's open/walk/close needs
+        // 420 + 84 more ticks than the first door's window.
+        if (f >= 1 && f <= 560) Input::setScriptedRightHeld(true);
+        snap(16);
+        snap(68);
+        snap(186);
+        snap(270);
+        snap(271);
+        snap(420);
+        snap(470);   // second record: the close is running
+        snap(520);   // after the release
+        snap(560);
     } else if (profile == "walk") {
         // Original timeline: walk right across two bursts, 5 snaps.
         bool right = (f >= 60  && f < 240) || (f >= 330 && f < 420);

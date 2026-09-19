@@ -18,9 +18,33 @@ int positiveModulo(int value, int divisor) {
 
 namespace mmx {
 
+std::optional<int> Tilemap::autoScrollPhaseOverrideY_;
+
+void Tilemap::setAutoScrollPhaseOverrideY(std::optional<int> phase) {
+    autoScrollPhaseOverrideY_ = phase;
+}
+
+std::optional<int> Tilemap::autoScrollPhaseOverrideY() {
+    return autoScrollPhaseOverrideY_;
+}
+
 static bool idListAllows(const std::vector<std::string>& ids, std::string_view activeId) {
     if (ids.empty()) return true;
     return std::find(ids.begin(), ids.end(), activeId) != ids.end();
+}
+
+// Whole-pixel vertical offset a layer has accumulated on its own by
+// `animTick`, from the measured per-tick rate. Flooring (not truncation)
+// keeps a negative fractional rate advancing one pixel at a time.
+static int autoScrollOffsetY(const TileLayer& layer, int animTick) {
+    if (layer.autoScrollY == 0.0f) return 0;
+    // T1.6b: an autotest that reproduces a movie frame forces the frame's own
+    // phase, because the anchor forces the camera and not the backdrop.
+    if (const std::optional<int> forced = Tilemap::autoScrollPhaseOverrideY()) {
+        return *forced;
+    }
+    return static_cast<int>(
+        std::floor(static_cast<double>(animTick) * layer.autoScrollY));
 }
 
 static bool phaseListAllows(const TileLayer& layer, int visualPhaseTick) {
@@ -83,10 +107,12 @@ std::vector<TileLayerRenderDiagnostic> Tilemap::collectRenderLayerDiagnostics(
         item.visualSectionIds = layer.visualSectionIds;
         item.parallaxX = layer.parallaxX;
         item.parallaxY = layer.parallaxY;
+        item.autoScrollY = layer.autoScrollY;
         item.previewOffsetX = layer.previewOffsetX;
         item.previewOffsetY = layer.previewOffsetY;
         item.scrollX = static_cast<int>(cameraX * layer.parallaxX) + layer.previewOffsetX;
-        item.scrollY = static_cast<int>(cameraY * layer.parallaxY) + layer.previewOffsetY;
+        item.scrollY = static_cast<int>(cameraY * layer.parallaxY) + layer.previewOffsetY
+            + autoScrollOffsetY(layer, animTick_);
         item.previewPath = layer.previewPath;
         item.previewWidth = layer.previewTex.valid() ? layer.previewTex.width() : 0;
         item.previewHeight = layer.previewTex.valid() ? layer.previewTex.height() : 0;
@@ -146,7 +172,8 @@ void Tilemap::renderTilePriorityForeground(
         return;
 
     const int scrollX = static_cast<int>(cameraX * main->parallaxX) + main->previewOffsetX;
-    const int scrollY = static_cast<int>(cameraY * main->parallaxY) + main->previewOffsetY;
+    const int scrollY = static_cast<int>(cameraY * main->parallaxY) + main->previewOffsetY
+        + autoScrollOffsetY(*main, animTick_);
     const int startCol = std::max(0, scrollX / tileSize_);
     const int startRow = std::max(0, scrollY / tileSize_);
     const int endCol = std::min(width_, startCol + (INTERNAL_WIDTH / tileSize_) + 2);
@@ -290,7 +317,8 @@ void Tilemap::renderLayer(const TileLayer& layer, float cameraX, float cameraY,
     // TEXTURE_FILTER_POINT because the sampler rounds per-destination-pixel,
     // not per-source-pixel.
     int scrollX = static_cast<int>(cameraX * layer.parallaxX) + layer.previewOffsetX;
-    int scrollY = static_cast<int>(cameraY * layer.parallaxY) + layer.previewOffsetY;
+    int scrollY = static_cast<int>(cameraY * layer.parallaxY) + layer.previewOffsetY
+        + autoScrollOffsetY(layer, animTick_);
 
     // Fast path: if this layer has its own pre-rendered image, blit it cropped
     // to the viewport with parallax applied. Each layer carries its own

@@ -9,10 +9,14 @@ recalibrated, not carried over as a claim of equivalent completion.
 
 This public code baseline supports an asset-independent core build and contracts.
 It is not a playable download and does not contain the original game's media,
-private measurements or generated visual tables. The development build has
-additional accepted gameplay work, including hurt/recovery trajectory corrections,
-that has not been exported into this source snapshot. A source synchronization
-requires dependency and provenance review plus public-build validation.
+private measurements or generated visual tables. The September 19 code synchronization imports the accepted development C++
+implementation, including hurt/recovery, projectile/contact and encounter work.
+All shared C++ source now matches development commit
+`3ea4eccd39295d897a62f38cf42d398e169f27be` except the two deliberately sanitized
+dialogue adapters. The 41-file update and hashes are in [source-sync.json](source-sync.json).
+No content, ROM, private research or generated includes were exported.
+Public build/contracts validate compilation and their specific assertions; the
+private gameplay acceptance suite and playable assets remain separate.
 
 The completion plan weights a fully accepted special weapon at 1%, each currently
 identified reusable enemy family at 0.75%, and each fully integrated stage at 2%.
@@ -33,6 +37,7 @@ totals 100%. Partial features earn only their accepted steps.
 
 Before taking a starter task, check existing pull requests and contributor branches
 so work is not duplicated. The screen-transform starter already has a proposal.
+The website now marks both proposals unavailable for duplicate implementation.
 Choose a bounded task from [CONTRIBUTING.md](../CONTRIBUTING.md) or use the
 [AI contribution kit](https://megaman.davidluky.com/en/contribute/ai/).
 
@@ -48,3 +53,12 @@ was posted and no merge was performed during this status update.
 
 Maintenance lesson: public task availability must reflect incoming proposals,
 while development-build progress must not be presented as exported public code.
+
+## September 19 synchronization receipt
+
+The asset-independent Release core build and 15/15 public contracts passed after
+the source synchronization. Dialogue adapters and missing-generated-data checks
+remain intact. No incoming contribution was overwritten or merged.
+
+Lesson: synchronize code, the pinned kit revision and task availability together;
+updating a roadmap alone leaves contributors working against an older API.

@@ -44,8 +44,20 @@ public:
     int maxHealth = 1;
     bool alive = true;
 
+    // T1.7 (Storm Eagle f1392..f1395): a seam that ends a rise AFTER the
+    // physics lane has run owes the next frame its gravity step. The source
+    // does not move X at all on the frame after the Storm Eagle platform
+    // underside zeroes his rise (dy 0) and only then falls from rest (+64,
+    // +128, +192 in 1/256 px), while moveAndCollide accumulates gravity before
+    // it applies the step. Default false: ordinary frames are unchanged.
+    bool gravityStepSpent = false;
+
     // Apply gravity to vertical velocity
     void applyGravity() {
+        if (gravityStepSpent) {
+            gravityStepSpent = false;
+            return;
+        }
         velocity.y += gravity;
         if (velocity.y > maxFallSpeed) {
             velocity.y = maxFallSpeed;

@@ -26,10 +26,11 @@ The [machine-readable plan](https://megaman.davidluky.com/downloads/X1-COMPLETIO
 and [readable plan](https://megaman.davidluky.com/downloads/X1-COMPLETION.md)
 define the complete X1 scope. X2, X3 and extra modes are separate expansions.
 
-**The website's playable development build and this public source snapshot are
-not the same release.** Later gameplay fixes and clips are not automatically
-included here. The public repository remains an asset-independent contribution
-baseline; see [project status and contributions](docs/project-status.md).
+**Original C++ source synchronized September 19, 2026.** The accepted engine
+implementation now matches the development baseline, with two deliberate
+dialogue exclusions. Assets, generated visual tables and private research remain
+separate, so this is still an asset-independent contribution checkout, not a
+playable download. See [source provenance and contributions](docs/project-status.md).
 
 ## Build and test
 

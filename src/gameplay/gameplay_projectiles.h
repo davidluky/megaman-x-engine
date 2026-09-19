@@ -196,9 +196,11 @@ struct EnemyHitResult {
     bool busterNormalContactPrelude = false;
     bool busterNormalLethalContactResidue = false;
     bool busterNormalSurvivorContactResidue = false;
-    bool shatterImpact = false;
-    float impactX = 0.0f;
-    float impactY = 0.0f;
+    // T1.2a.3 (2026-09-15): a Shotgun Ice enemy hit shatters — fragments plus
+    // the 0x78 SFX — but draws no burst, so this result carries no burst
+    // anchor (the movie's OAM at drop frames 16159 and 17898 holds only the
+    // 16 x 16 contact square the table-weapon contact impact already spawns).
+    bool shatteredOnEnemyHit = false;
     int shatterSfx = -1;
 };
 

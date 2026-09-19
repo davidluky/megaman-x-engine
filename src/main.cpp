@@ -14,7 +14,9 @@
 #include "ui/bloody_palace_scene.h"
 #include "ui/map_editor_scene.h"
 #include "systems/randomizer.h"
+#include "systems/tilemap.h"
 #include <cerrno>
+#include <climits>
 #include <cmath>
 #include <cctype>
 #include <cstdint>
@@ -462,6 +464,24 @@ int main(int argc, char** argv) {
                 return 2;
             }
             cli.hasAutotestRenderCameraOverride = true;
+        }
+        // T1.6b: force the backdrop's own vertical phase for this frame. The
+        // anchor forces the frame's PPU camera; a layer that scrolls by itself
+        // (TileLayer::autoScrollY) would otherwise land wherever the harness's
+        // animTick has reached. The value is the movie frame's `bg2_v`
+        // (knowledge_base/_movies/<stage>/player.csv), in whole pixels.
+        const char* bg2PhaseY = std::getenv("MMX_AUTOTEST_BG2_PHASE_Y");
+        if (bg2PhaseY && *bg2PhaseY) {
+            char* end = nullptr;
+            errno = 0;
+            const long parsed = std::strtol(bg2PhaseY, &end, 10);
+            if (errno != 0 || end == bg2PhaseY || (end && *end != '\0') ||
+                parsed < INT_MIN || parsed > INT_MAX) {
+                std::fprintf(stderr,
+                             "Invalid MMX_AUTOTEST_BG2_PHASE_Y value: expected an integer\n");
+                return 2;
+            }
+            mmx::Tilemap::setAutoScrollPhaseOverrideY(static_cast<int>(parsed));
         }
     }
 

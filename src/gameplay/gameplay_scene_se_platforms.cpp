@@ -234,10 +234,25 @@ bool StormEaglePlatformScene::resolvePlayerContact(Player& player,
                                   horizontalDistance + 1;
     const int verticalOverlap = kPlayerHeight + kPlatformHeight -
                                 verticalDistance + 1;
-    const bool topContact = platformCenterY >= playerCenterY &&
-                            horizontalOverlap >= verticalOverlap;
-    const bool contact = topContact && horizontalOverlap >= 1 &&
-                         verticalOverlap >= 1;
+    const bool verticalAxis = horizontalOverlap >= verticalOverlap;
+    const bool overlapping = horizontalOverlap >= 1 && verticalOverlap >= 1;
+    const bool topContact = platformCenterY >= playerCenterY && verticalAxis;
+    const bool contact = topContact && overlapping;
+
+    // T1.7e: the same profile pair resolved the other way up. On source frame
+    // 1392 of the Storm Eagle movie X's rising profile reaches overlapY 1
+    // against the record at $7E16E8 (573,1488 against 560,1480) and the source
+    // zeroes his rise for 1393 without moving him and without supporting him:
+    // he then falls from rest. A downward velocity is left alone.
+    if (overlapping && verticalAxis && platformCenterY < playerCenterY &&
+        player.velocity.y < 0.0f) {
+        player.velocity.y = 0.0f;
+        // T1.7: and the frame after it does not move him. This seam runs in
+        // the post-physics object lane, so the zero it writes is still worth
+        // one accumulation on the next moveAndCollide unless it is spent
+        // here; the source's f1393 dy is 0 and its f1394 dy is +64/256.
+        player.gravityStepSpent = true;
+    }
 
     // The source top-contact correction is -overlap+1, capped at -8.  The
     // measured first contact has overlap=1 and therefore keeps its native

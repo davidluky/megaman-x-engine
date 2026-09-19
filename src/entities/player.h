@@ -117,6 +117,9 @@ public:
     void finishStormEagleSupport(bool currentSupport);
     void clearStormEagleSupport();
     bool stormEagleSupportLatched() const { return stormEagleSupportLatched_; }
+    // Measured object support loss: Run changes state without moving this tick.
+    void queueSourceObjectDeparture() { sourceObjectDeparturePending_ = true; }
+    bool sourceObjectDepartureFrame() const { return sourceObjectDepartureFrame_; }
 
     void render(float alpha) override;
     void render(float alpha, Vector2 cameraOffset);
@@ -146,6 +149,8 @@ public:
     // the state-driven animation refresh never runs; this forces the plain
     // standing pose regardless of the animation the scene interrupted.
     void forceIdlePose();
+    // Gate action 18 retains the current pose while the scene owns physics.
+    void tickAnimationOnly() { anim_.tick(); }
 
     // CP-B1C-T1-M2 scripted boss-entry walk. The ceremonial entry walk is
     // 116/256 px per tick — ~3x slower than runSpeed — so it cannot come
@@ -199,20 +204,12 @@ public:
     int coyoteFrames = 4;
     int jumpBufferFrames = 6;
 
-    // Damage — U21 oracle (mined from the walker/bat observe ladders,
-    // _walker_runs/obs_p110+p170 + _bat_runs/obs_p250 full-precision
-    // player.csv around every hp drop):
-    //   - knockback = EXACTLY fp 138/256 = 0.5390625 px/f away from the
-    //     source, held for EXACTLY 28 frames, then a dead stop (raw fp dx:
-    //     0, then -138 x28, then 0s — identical across runs/hits);
-    //   - a small hop at the hit: the measured 2px-up/8f y profile under
-    //     the standard gravity = vy -1.0;
-    //   - i-frames EXACTLY 91 (the minimum hit-to-hit gap; 7 clean
-    //     samples, every pressed ladder gap is 91 or larger).
+    // hurt_entry_2026-09-19: unarmored baseline; body halves the impulse
+    // and shortens the reaction by one update. Init/exit do not integrate.
     float hurtKnockbackX = 138.0f / 256.0f;
-    float hurtKnockbackY = -1.0f;
-    int hurtDuration = 29;       // 1 hit-frame hold + 28 slide frames
-    int iframeDuration = 91;     // exact (was 60)
+    float hurtKnockbackY = -2.0f;
+    int hurtDuration = 30;       // 29 moving updates, then action exit
+    int iframeDuration = 91;
     bool hasArmor = false;       // Halves all damage
 
     // Lives
@@ -279,6 +276,9 @@ public:
     void takeDamage(int amount, float knockbackDirX);
     void forceDeath();
     void respawnAt(Vector2 spawn, int invulnerableFrames = 90, bool grounded = false);
+    // Scene-owned physics must hold the source damage-init and recovery
+    // transition rows. This is true only for the current Player::update handoff.
+    bool hurtEntryFrame() const { return hurtEntryFrame_; }
     bool isInvulnerable() const {
         return iframeTimer_ > 0 || stingInvincibleFrames > 0
             || state_ == PlayerState::Die;
@@ -380,6 +380,9 @@ private:
     int wallDropPoseTimer_ = 0;
     bool wallDropVisualFacingRight_ = true;
     bool usedAirDash_ = false;   // Reset on landing — only one air dash per jump
+    // T1.7 (Storm Eagle f2112): a dash-jump's rise ends once, and the source
+    // restarts the fall from zero when it does. Armed by changeState.
+    bool dashJumpRiseEnded_ = false;
 
     int landingAnimTimer_ = 0;   // Visual-only landing recovery pose; controls remain live.
 
@@ -387,6 +390,8 @@ private:
     // intentionally separate from tile onGround and never changes Y speed.
     bool stormEagleSupportLatched_ = false;
     bool stormEagleSupportFrameActive_ = false;
+    bool sourceObjectDeparturePending_ = false;
+    bool sourceObjectDepartureFrame_ = false;
 
     // Idle eye-blink. The real game shuts X's eyes for ~7 frames roughly every
     // ~70 frames while standing, with an occasional quick double-blink (measured
@@ -428,6 +433,10 @@ private:
     // Damage state
     int hurtTimer_ = 0;      // Frames remaining in hurt state
     int iframeTimer_ = 0;    // Frames of invincibility remaining
+    bool hurtInitPending_ = false;
+    bool hurtRecoveryPending_ = false;
+    bool hurtEntryFrame_ = false;
+    float hurtKnockbackDirection_ = -1.0f;
     int deathTimer_ = 0;     // Animation timer for death sequence
     std::vector<DeathNode> deathNodes_;  // Active death-burst particles
 
@@ -441,6 +450,7 @@ private:
     void updateDash();
     void updateDashJump();
     void updateLadder();
+    bool updateHurtTransition();
     void updateHurt();
     void updateDie();
     void spawnDeathBurst();

@@ -40,6 +40,8 @@ void Player::fireGroundJump() {
     } else {
         // update() skips the state handler when spending this delayed launch,
         // so horizontal input is selected here exactly once.
+        // CP2016: the grounded walk-start zero must not consume the first ascent.
+        onGround = false;
         applyHorizontalInput();
         changeState(PlayerState::Jump);
     }
@@ -53,7 +55,13 @@ bool Player::tryJump() {
 
     if (onGround) {
         const auto profile = sourceContactProfile();
-        const bool sourceWalk = sourceGroundMovementEnabled_ &&
+        // T1.7: the same-update launch is the ROM's, not the authored Chill
+        // Penguin stage's, so sourceGroundMovementEnabled_ does not gate it.
+        // Storm Eagle f1408 (b+left, X grounded on the deck platform) is
+        // followed by f1409 already carrying the whole -1299/256 launch
+        // displacement, with the walk's own -120/256 kept in x (capture
+        // build/t17-land, harvest of the committed storm-eagle.mmo).
+        const bool sourceWalk =
             state_ == PlayerState::Run &&
             profile && *profile == SourceContactProfile::NormalA552 &&
             !(walkStartRamping_ && walkStartTick_ < kWalkStartFrames);

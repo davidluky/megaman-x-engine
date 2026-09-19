@@ -26,7 +26,6 @@ inline void applyPlayerDamage(Player& player,
     if (!hit.hit) return;
 
     player.takeDamage(hit.damage, hit.direction);
-    AudioManager::playApu(0x09);   // measured hurt cry (R6)
     camera.shake(hit.shakeStrength, hit.shakeFrames);
 }
 
@@ -52,11 +51,9 @@ inline bool applyShieldedPlayerDamage(
     return true;
 }
 
-template <typename SpawnImpactBurst>
 inline void applyEnemyHit(Enemy& enemy,
                           std::vector<Pickup>& pickups,
-                          const gameplay_projectiles::EnemyHitResult& hit,
-                          SpawnImpactBurst&& spawnImpactBurst) {
+                          const gameplay_projectiles::EnemyHitResult& hit) {
     if (!hit.handled) return;
 
     if (hit.killedEnemy) {
@@ -75,8 +72,10 @@ inline void applyEnemyHit(Enemy& enemy,
         AudioManager::playApu(0x11);   // measured hit impact (R6)
     }
 
-    if (hit.shatterImpact) {
-        spawnImpactBurst(hit.impactX, hit.impactY);
+    // T1.2a.3 (2026-09-15): the shatter on an enemy hit is audible and spawns
+    // fragments, but draws no burst — the source's only palette-2 effect at
+    // both measured Shotgun Ice boss hits is the 16 x 16 contact square.
+    if (hit.shatteredOnEnemyHit) {
         AudioManager::playApu(hit.shatterSfx);
     }
 }

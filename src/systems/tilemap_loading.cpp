@@ -384,6 +384,7 @@ bool Tilemap::loadFromFile(const std::string& path) {
                 layer.name = jl.value("name", "unnamed");
                 layer.parallaxX = jl.value("parallaxX", 1.0f);
                 layer.parallaxY = jl.value("parallaxY", 1.0f);
+                layer.autoScrollY = jl.value("autoScrollY", 0.0f);
                 layer.previewOffsetX = jl.value("previewOffsetX", 0);
                 layer.previewOffsetY = jl.value("previewOffsetY", 0);
                 layer.repeatPreviewX = jl.value("repeatPreviewX", false);
@@ -1044,6 +1045,7 @@ void Tilemap::saveToFile(const std::string& path) const {
         jl["name"] = layer.name;
         jl["parallaxX"] = layer.parallaxX;
         jl["parallaxY"] = layer.parallaxY;
+        if (layer.autoScrollY != 0.0f) jl["autoScrollY"] = layer.autoScrollY;
         if (!layer.previewPath.empty()) jl["previewPath"] = layer.previewPath;
         if (layer.previewOffsetX != 0) jl["previewOffsetX"] = layer.previewOffsetX;
         if (layer.previewOffsetY != 0) jl["previewOffsetY"] = layer.previewOffsetY;

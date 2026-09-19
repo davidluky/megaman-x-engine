@@ -21,6 +21,45 @@ inline bool isEligible(const HitEligibility& hit) {
            !hit.killedEnemy;
 }
 
+// Special weapons whose impact placement is pinned by
+// knowledge_base/mmx1/weapons/impact_contact_law_2026-09-15.json (plan task
+// T1.2a.2, measured 2026-09-15 at the OID 0x50 deck turret, equipped through
+// the pause menu). Shotgun Ice is the only pinned weapon so far: the impact
+// centre sits 15 px from the contacted hitbox edge and at the bullet's own y,
+// identically at 40 and 84 px (spread 0). Rolling Shield, Fire Wave and
+// Boomerang Cutter measured `none`; Homing Torpedo (16, 14 px) and Chameleon
+// Sting (15, 18 px) vary across the two distances; Electric Spark landed no
+// attributed hit. Those six are absent from the table and keep today's rule
+// (no impact).
+struct TableWeaponContactConstants {
+    float contactEdgeOffsetX = 0.0f;
+    float bulletOffsetY = 0.0f;
+};
+
+inline std::optional<TableWeaponContactConstants> tableWeaponContact(
+    std::string_view weaponId) {
+    if (weaponId == "shotgun-ice") {
+        return TableWeaponContactConstants{15.0f, 0.0f};
+    }
+    return std::nullopt;
+}
+
+// The movie's attributed special-weapon hits are all uncharged (`normal`
+// form), so this eligibility is separate from isEligible above, which stays
+// charged-Buster-only.
+struct TableWeaponContactEligibility {
+    bool normalShot = false;
+    std::string_view weaponId;
+    bool damagedEnemy = false;
+    bool killedEnemy = false;
+};
+
+inline bool isTableWeaponContactEligible(
+    const TableWeaponContactEligibility& hit) {
+    return hit.normalShot && hit.damagedEnemy && !hit.killedEnemy &&
+           tableWeaponContact(hit.weaponId).has_value();
+}
+
 struct NormalBusterLethalContactEligibility {
     bool normalShot = false;
     std::string_view weaponId;
@@ -79,6 +118,7 @@ enum class ImpactKind {
     NormalBusterContactPrelude,
     NormalBusterLethalContactResidue,
     NormalBusterSurvivorContactResidue,
+    TableWeaponContact,
 };
 
 enum class NormalBusterContactBranch {
@@ -228,6 +268,35 @@ inline Impact spawnNormalBusterSurvivorContactResidue(
     return impact;
 }
 
+// Target-owned like placeAtProjectileContact() below: the measured anchor is
+// the contacted hitbox edge plus the weapon's constant, mirrored when the
+// bullet travels left, at the bullet's own y plus its constant
+// (impact_contact_law_2026-09-15.json; the runs measured a 16 x 16 palette-2
+// sprite). The artifact pins the placement only, so the cadence and art stay
+// the already-wired 16 x 16 contact family's (retirementAge 9,
+// normalContactCellForAge) rather than a new unmeasured number.
+inline Impact spawnTableWeaponContact(const ProjectileBounds& projectile,
+                                      const TargetBounds& target,
+                                      const TableWeaponContactConstants& constants,
+                                      int sourceProjectileSerial = 0,
+                                      int targetSerial = 0) {
+    const float contactEdgeX =
+        projectile.facingRight ? target.left : target.left + target.width;
+    const float offsetX = projectile.facingRight ? constants.contactEdgeOffsetX
+                                                 : -constants.contactEdgeOffsetX;
+    Impact impact{
+        contactEdgeX + offsetX,
+        projectile.top + projectile.height * 0.5f + constants.bulletOffsetY,
+        0,
+        !projectile.facingRight,
+        sourceProjectileSerial,
+        targetSerial,
+        ImpactKind::TableWeaponContact,
+    };
+    impact.atContactPoint = true;
+    return impact;
+}
+
 // R282/R286 playable review: the target-owned offsets above authenticate a
 // particular source layout. Elsewhere, keep the same art/cadence at the
 // resolved horizontal Buster contact, including rear and high/low hits.
@@ -249,6 +318,7 @@ inline int retirementAge(const ImpactKind kind) {
         return 1;
     case ImpactKind::NormalBusterLethalContactResidue:
     case ImpactKind::NormalBusterSurvivorContactResidue:
+    case ImpactKind::TableWeaponContact:
         return 9;
     }
     return 0;
@@ -304,6 +374,16 @@ inline void writeParityTraceRows(const std::vector<Impact>& impacts,
             impact.kind == ImpactKind::NormalBusterLethalContactResidue;
         const bool survivorContact =
             impact.kind == ImpactKind::NormalBusterSurvivorContactResidue;
+        if (impact.kind == ImpactKind::TableWeaponContact) {
+            writeRow("fx", impact.sourceProjectileSerial,
+                     "weapon_table_contact_impact",
+                     impact.age, cell,
+                     impact.anchorX, impact.anchorY, 0.0f, 0.0f,
+                     cell >= 0 ? 1 : 0,
+                     impact.mirror ? 1 : 0,
+                     impact.targetSerial, 0);
+            continue;
+        }
         const char* id = contactPrelude
                              ? "buster_normal_contact_prelude"
                              : (lethalContact
@@ -340,6 +420,22 @@ inline std::optional<ImpactDraw> drawFor(const Impact& impact,
             16,
             impact.anchorX - cameraX - (impact.atContactPoint ? 8.0f : 28.0f),
             impact.anchorY - cameraY + (impact.atContactPoint ? -8.0f : 16.0f),
+            impact.mirror,
+            std::nullopt,
+        };
+    }
+
+    if (impact.kind == ImpactKind::TableWeaponContact) {
+        // The measured anchor is the impact sprite's centre, and the sprite is
+        // 16 x 16 (impact_contact_law_2026-09-15.json).
+        return ImpactDraw{
+            cell,
+            cell * 16,
+            0,
+            16,
+            16,
+            impact.anchorX - cameraX - 8.0f,
+            impact.anchorY - cameraY - 8.0f,
             impact.mirror,
             std::nullopt,
         };

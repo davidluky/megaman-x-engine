@@ -67,6 +67,7 @@ inline void drainPendingShots(Enemy& enemy, std::vector<Projectile>& projectiles
         projectile.isPlayerShot = false;
         projectile.applyEnemyVisual();
         projectile.damage = shot.damage;
+        projectile.sourceAxeMaxLog = shot.sourceAxeMaxLog;
         if (!shot.sprite.empty()) {
             // Measured enemy-shot art, such as Axe Max logs, is centered on
             // the authored shot anchor and mirrors by velocity.

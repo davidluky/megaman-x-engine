@@ -101,6 +101,7 @@ namespace { int s_nextEnemySerial = 0; }
 
 void Enemy::configureCpCameraReturn() {
     if (type != "axemax" || behavior != EnemyBehavior::AxeMax) return;
+    if (!cpCameraReturn_) ++axeTimer_; // source claim -> init consumes one update
     cpCameraReturn_ = true;
     cameraReturnNativeOrigin_ = position;
     // camera_return.json: D080 saves the placement, then adds (+32,-14).
@@ -152,6 +153,14 @@ void Enemy::init(const std::string& enemyType, float x, float y) {
     hoverPatrolHorizontalEntered_ = false;
     cameraActivated = false;
     serial = ++s_nextEnemySerial;
+    stretchBirdState_ = {};
+    stretchBirdLaunch_ = false;
+    deck_turret_parent::ParentFields turretFields;
+    turretFields.parent_x = static_cast<std::uint16_t>(static_cast<std::int64_t>(std::floor(x)));
+    deckTurretController_ = deck_turret_parent::ParentController(turretFields);
+    deckTurretLaunch_ = false;
+    madPeckerController_ = {};
+    madPeckerLaunch_ = false;
     type = canonicalDefinitionId(enemyType);
     position = {x, y};
     prevPosition = position;
@@ -164,6 +173,7 @@ void Enemy::init(const std::string& enemyType, float x, float y) {
     frameHeight_ = 32;
     frameCount_ = 0;
     bodyVisualOffsetY_ = 0.0f;
+    sourceWalker_ = false;
     bodyMirrorsWithFacing_ = true;
     bodySourceFacesRight_ = true;
     placeholderLabel_.clear();
@@ -489,6 +499,7 @@ void Enemy::render(float alpha) {
 
 void Enemy::render(float alpha, Vector2 cameraOffset) {
     if (!active) return;
+    if (sourceWalker_ && !sourceWalkerDrawReady_) return;
     // The first source hardware-OAM body follows both setup updates.
     // See render_phase.json; creation/contact and death have separate timing.
     if (enemyState != EnemyState::Dead &&
@@ -496,6 +507,10 @@ void Enemy::render(float alpha, Vector2 cameraOffset) {
         !hoverPatrolHorizontalEntered_) return;
     float drawX = prevPosition.x + (position.x - prevPosition.x) * alpha - cameraOffset.x;
     float drawY = prevPosition.y + (position.y - prevPosition.y) * alpha - cameraOffset.y;
+    if (sourceWalker_ && enemyState != EnemyState::Dead) {
+        drawX = std::floor(sourceWalkerDrawPosition_.x) - cameraOffset.x;
+        drawY = std::floor(sourceWalkerDrawPosition_.y) - cameraOffset.y;
+    }
 
     if (enemyState == EnemyState::Dead) {
         // AxeMax remnant: the explosion is over — draw only the frozen,
@@ -573,6 +588,21 @@ void Enemy::renderBody(float drawX, float drawY, bool allowHitFlashOverlay) {
         // exceed frameCount.
         int maxFrames = frameCount_ > 0 ? frameCount_ : cols;
         int frameIdx = anim_.currentFrameIndex();
+        if (sourceWalker_ && enemyState != EnemyState::Dead)
+            frameIdx = sourceWalkerDrawCell_;
+        const bool deckTurret = type == "se_turret" &&
+            behavior == EnemyBehavior::Anchored && enemyState != EnemyState::Dead;
+        if (deckTurret) frameIdx = deckTurretState().art_17 - 0x80;
+        if (type == "mad_pecker" && behavior == EnemyBehavior::Anchored &&
+            enemyState != EnemyState::Dead) frameIdx = madPeckerController_.animation.art17 - 0x80;
+        if (type == "stretch_bird" && behavior == EnemyBehavior::Anchored &&
+            enemyState != EnemyState::Dead) {
+            const auto art = stretchBirdState_.animation.current().art;
+            // Existing atlas 83..86,8B..96; source idle 87..8A appended at 16.
+            if (art >= 0x83 && art <= 0x86) frameIdx = art - 0x83;
+            else if (art >= 0x87 && art <= 0x8A) frameIdx = 16 + art - 0x87;
+            else if (art >= 0x8B && art <= 0x96) frameIdx = 4 + art - 0x8B;
+        }
         if (frameIdx >= maxFrames) frameIdx = maxFrames - 1;
         if (frameIdx < 0) frameIdx = 0;
         int tx = (frameIdx % cols) * fw;
@@ -585,6 +615,22 @@ void Enemy::renderBody(float drawX, float drawY, bool allowHitFlashOverlay) {
         float dy = enemyBodyTopY(hbBottom, fh, bodyVisualOffsetY_);
         float srcW = enemyBodySourceWidth(
             fw, facingRight, bodyMirrorsWithFacing_, bodySourceFacesRight_);
+        if (sourceWalker_ && enemyState != EnemyState::Dead) {
+            // walker_contact_cycles_2026-09-17.json: 90 exact OAM matches.
+            constexpr float ox[4] = {-20, -19, -19, -20};
+            constexpr float oy[4] = {-39, -39, -35, -25};
+            const int cell = sourceWalkerDrawCell_;
+            dx = drawX + (sourceWalkerDrawFacing_ ? -40 - ox[cell] : ox[cell]);
+            dy = drawY + oy[cell];
+            srcW = sourceWalkerDrawFacing_ ? -static_cast<float>(fw) : static_cast<float>(fw);
+        }
+        if (deckTurret) {
+            // OID 50 attack_parent_atlas.json: normalized six-cell source
+            // envelope is -30..+23; reflection around the source pixel is
+            // -23..+30. Sprite placement is independent of contact geometry.
+            dx = drawX + (facingRight ? -23.0f : -30.0f);
+            dy = drawY - 14.0f;
+        }
         Rectangle srcRect  = { (float)tx, (float)ty, srcW, (float)fh };
         Rectangle destRect = { dx, dy, (float)fw, (float)fh };
         Color tint = WHITE;
@@ -685,6 +731,41 @@ AABB Enemy::solidAxeStackHitbox() const {
         top = std::min(top, logTop);
     }
     return {left, top, right - left, groundY - top};
+}
+
+std::vector<Enemy::AxeStackSourceBox> Enemy::axeStackSourceContactBoxes() const {
+    // Source: knowledge_base/mmx1/enemies/oid_0x0B_axemax_stage_coverage/
+    // launcher_solid_box_2026-09-15.json (descriptors, list order, records).
+    const auto lowerLog = cpRemnantLogSourceAnchor();
+    const auto upperLog = cpRemnantUpperLogSourceAnchor();
+    if (behavior != EnemyBehavior::AxeMax || !lowerLog || !upperLog) return {};
+
+    struct Descriptor {
+        std::uint16_t address;
+        int offsetX, offsetY, halfExtentX, halfExtentY;
+    };
+    constexpr Descriptor kList[2] = {
+        {0xC0CE, 0, -4, 10, 7},  // $86:C0CE = 00 FC 0A 07
+        {0xC0D2, 0, 0, 13, 7},   // $86:C0D2 = 00 00 0D 07
+    };
+    // The launcher record's position is the retained source origin
+    // (camera_return.json D080 relation), which the T1.7g trap read live at
+    // $142D/$1430 = (469, 1160).
+    const Vector2 records[3] = {cameraReturnSourceOrigin_, *lowerLog, *upperLog};
+    std::vector<AxeStackSourceBox> boxes;
+    boxes.reserve(6);
+    for (const auto& record : records) {
+        const float x = std::floor(record.x);
+        const float y = std::floor(record.y);
+        for (const auto& d : kList) {
+            boxes.push_back({d.address,
+                             {x + static_cast<float>(d.offsetX - d.halfExtentX),
+                              y + static_cast<float>(d.offsetY - d.halfExtentY),
+                              static_cast<float>(2 * d.halfExtentX + 1),
+                              static_cast<float>(2 * d.halfExtentY + 1)}});
+        }
+    }
+    return boxes;
 }
 
 void Enemy::updatePatrol() {
@@ -860,6 +941,14 @@ void Enemy::updateAxeMax() {
             s.w = 32.0f;
             s.h = 16.0f;
             s.visualMirrorsWithFacing = false;
+            if (cpCameraReturn_) {
+                // second_creation_and_log_2026-09-17.json: C0D6 contact, separate art.
+                s.x = std::floor(cameraReturnSourceOrigin_.x);
+                s.y = std::floor(cameraReturnSourceOrigin_.y) - 32.0f;
+                s.w = 26; s.h = 12;
+                s.visualWidth = 32; s.visualHeight = 16;
+                s.sourceAxeMaxLog = true;
+            }
             s.damage = 2;   // Source trace 2026-07-05: clean unarmored
                             // log-hit candidates pin base damage 2.
             pendingShots.push_back(s);
@@ -905,7 +994,104 @@ void Enemy::updateAxeMax() {
     axeSweep_ = 0;
 }
 
+void Enemy::configureSourceWalker() {
+    sourceWalker_ = true;
+    sourceWalkerPhase_ = 0;
+    sourceWalkerSpawnX_ = std::floor(position.x);
+    sourceWalkerWait_ = 1;
+    sourceWalkerCell_ = sourceWalkerDrawCell_ = 0;
+    sourceWalkerCellTicks_ = 8;
+    sourceWalkerDrawReady_ = false;
+    sourceWalkerDrawPosition_ = position;
+    gravity = 0;
+    velocity = {0, 0};
+    hitboxOffset = {-12, -12};
+    hitboxSize = {24, 22};
+}
+
+void Enemy::pickSourceWalkerLaunch() {
+    // walker_direction_gate_2026-09-17.json: init and stand timer 16.
+    // walker_action_gates_2026-09-17.json: D791 forces inward at 128px.
+    const float fromSpawn = std::floor(position.x) - sourceWalkerSpawnX_;
+    if (fromSpawn >= 128) facingRight = false;
+    else if (fromSpawn <= -128) facingRight = true;
+    else if (target_) facingRight = player_anchor::sourceRamAnchorX(
+        target_->position.x, target_->spriteWidth, target_->facingRight) >= position.x;
+    sourceWalkerVx_ = facingRight ? 1.5f : -1.5f;
+    sourceWalkerVy_ = -4;
+}
+
+void Enemy::updateSourceWalker() {
+    // T1.7l first-hop and controlled repeat-hop witnesses. Firing branch
+    // integration remains pending; the measured hop path is accepted.
+    sourceWalkerDrawPosition_ = position;
+    sourceWalkerDrawCell_ = sourceWalkerCell_;
+    sourceWalkerDrawFacing_ = facingRight;
+    sourceWalkerDrawReady_ = sourceWalkerPhase_ != 0;
+    velocity = {0, 0};
+    if (sourceWalkerPhase_ == 0) {
+        pickSourceWalkerLaunch();
+        sourceWalkerPhase_ = 1;
+        return;
+    }
+    if (sourceWalkerPhase_ == 1) {
+        if (sourceWalkerWait_ == 16) pickSourceWalkerLaunch();
+        if (--sourceWalkerWait_ != 0) return;
+        sourceWalkerCell_ = 0;
+        sourceWalkerCellTicks_ = 8;
+        sourceWalkerPhase_ = 2;
+        return;
+    }
+    if (sourceWalkerPhase_ == 2) {
+        if (sourceWalkerCell_ == 3) {
+            sourceWalkerPhase_ = 3;
+            return;
+        }
+        if (--sourceWalkerCellTicks_ == 0) {
+            ++sourceWalkerCell_;
+            sourceWalkerCellTicks_ = 8;
+        }
+        return;
+    }
+    sourceWalkerVy_ += 0.25f;
+    velocity = {sourceWalkerVx_, sourceWalkerVy_};
+    if (sourceWalkerVy_ > 0) sourceWalkerCell_ = 2;
+}
+
+void Enemy::finishSourceWalkerMotion(float attemptedY) {
+    if (!sourceWalker_ || sourceWalkerPhase_ != 3) return;
+    bool sourceFloor = false;
+    // walker_slope_contact/fetch_2026-09-17.json: probe is box bottom+4,
+    // tile coordinates use integer words and local nibble+1, not interpolation.
+    if (tilemap_ && tilemap_->tileSize() == 16 && sourceWalkerVy_ > 0) {
+        const int x = static_cast<int>(std::floor(position.x));
+        const int probeY = static_cast<int>(std::floor(attemptedY)) + 14;
+        const int col = x / 16, row = probeY / 16;
+        const auto type = tilemap_->getTileType(col, row);
+        const auto slope = tilemap_->getSlope(col, row);
+        sourceFloor = type == TileType::Solid ||
+            (type == TileType::SlopeL && slope.rightY == slope.leftY + 4);
+        if (sourceFloor) {
+            const int height = type == TileType::Solid ? 0 :
+                slope.leftY + (((x & 15) + 1) >> 2);
+            onGround = height < (probeY & 15) + 1;
+            position.y = onGround ? row * 16 + height - 11 +
+                attemptedY - std::floor(attemptedY) : attemptedY;
+            if (!onGround) velocity.y = sourceWalkerVy_;
+        }
+    }
+    if (!onGround) return;
+    // Unmeasured terrain retains its existing collision behavior.
+    if (!sourceFloor)
+        position.y = std::floor(position.y) - 1 + attemptedY - std::floor(attemptedY);
+    sourceWalkerPhase_ = 1;
+    sourceWalkerWait_ = 30;
+    sourceWalkerCell_ = 0;
+    velocity = {0, 0};
+}
+
 void Enemy::updateWalker() {
+    if (sourceWalker_) { updateSourceWalker(); return; }
     // CP OID 0x51 (U17, _walker_runs/FINDINGS.md, obs_p110/140/170):
     //   - pure chaser: EVERY bout toward X (12/12 incl. tracking X's
     //     knockback dance); facing follows X;
@@ -1252,13 +1438,68 @@ void Enemy::updateEagletBurst() {
 }
 
 void Enemy::updateAnchored() {
-    // It does not move. Measured on two OIDs of David's Chill Penguin movie:
-    // 0x53 the mad pecker over seven instances (181, 99, 56, 66, 173, 87 and
-    // 79 rows) and 0x04 the stretch bird over four (283, 116, 100, 26), with
-    // dx = dy = 0 on every pair of both. Neither one's ATTACK is wired: the
-    // cadences are measured but their triggers are not.
+    // Source anchored actors remain motionless while their attack controllers run.
     velocity = {0.0f, 0.0f};
     enemyState = EnemyState::Idle;
+    if (type == "mad_pecker") {
+        const auto word = [](float value) {
+            return static_cast<std::uint16_t>(static_cast<std::int64_t>(std::floor(value)));
+        };
+        const auto px = target_ ? word(player_anchor::sourceRamAnchorX(
+            target_->position.x,target_->spriteWidth,target_->facingRight)) : word(position.x);
+        const auto py = target_ ? word(target_->position.y+40.0f) : word(position.y);
+        if (madPeckerController_.state01 == 0) {
+            // Fresh initialization is its own source dispatch, without a live tick.
+            // Native textures replace level-specific graphics/palette indices.
+            madPeckerController_ = mad_pecker_parent_source::initializeState00_87_DEFF(
+                word(position.x),word(position.y),px,{}).controller;
+        } else {
+            madPeckerLaunch_ = madPeckerController_.tick(px,py).requestChild23;
+        }
+        facingRight = (madPeckerController_.attr11 & 0x40) != 0;
+        if (madPeckerController_.state01 == 4) enemyState = EnemyState::Shoot;
+        return;
+    }
+    if (type == "se_turret") {
+        deck_turret_parent::PlayerInput input{};
+        if (target_) {
+            input.player_x = static_cast<std::uint16_t>(static_cast<std::int64_t>(std::floor(
+                player_anchor::sourceRamAnchorX(target_->position.x, target_->spriteWidth, target_->facingRight))));
+            // Authenticated terrain ground bit BD3=04. Other source terrain bits
+            // remain outside the current normal/active-dash contact mapping.
+            input.player_bd3 = target_->onGround;
+            input.helper_angle = deck_turret_parent::aim(
+                static_cast<std::uint16_t>(deckTurretController_.fields().parent_x),
+                static_cast<std::uint16_t>(static_cast<std::int64_t>(std::floor(position.y))),
+                static_cast<std::uint16_t>(input.player_x),
+                static_cast<std::uint16_t>(static_cast<std::int64_t>(std::floor(target_->position.y + 40.0f))));
+        }
+        deckTurretLaunch_ = deckTurretController_.tick(input).fired;
+        const auto& state = deckTurretController_.fields();
+        facingRight = (state.attr_11 & 0x40) != 0;
+        if (state.flag_35 != 0 || state.state == 4) enemyState = EnemyState::Shoot;
+        return;
+    }
+    if (type != "stretch_bird") return;
+    stretch_bird_parent::Input input{};
+    input.parentAttr11 = facingRight ? 0 : 0x40;
+    if (target_) {
+        const auto word = [](float value) {
+            return static_cast<std::uint16_t>(static_cast<std::int64_t>(std::floor(value)));
+        };
+        input.playerX = word(player_anchor::sourceRamAnchorX(
+            target_->position.x, target_->spriteWidth, target_->facingRight));
+        input.playerY = word(target_->position.y + 40.0f);
+        const auto profile = target_->sourceContactProfile();
+        if (profile) input.playerDescriptor = *profile == SourceContactProfile::NormalA552
+            ? stretch_bird_parent::PlayerDescriptor::NormalA552
+            : stretch_bird_parent::PlayerDescriptor::ActiveDashBB38;
+    }
+    const auto result = stretch_bird_parent::step(stretchBirdState_, input,
+        static_cast<std::uint16_t>(static_cast<std::int64_t>(std::floor(position.x))),
+        static_cast<std::uint16_t>(static_cast<std::int64_t>(std::floor(position.y))));
+    stretchBirdLaunch_ = result.spawnChild;
+    if (result.action != 0) enemyState = EnemyState::Shoot;
 }
 
 void Enemy::updateBatDrift() {

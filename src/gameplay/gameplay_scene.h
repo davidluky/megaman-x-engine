@@ -15,6 +15,7 @@
 #include "gameplay/storm_eagle_industrial_destruction.h"
 #include "gameplay/storm_eagle_heart_tank_placement.h"
 #include "gameplay/gameplay_scene_se_platforms.h"
+#include "gameplay/gameplay_scene_fm_gates.h"
 #include "gameplay/stage_start_timeline.h"
 #include "gameplay/weapon_get_presentation.h"
 #include "app/input.h"
@@ -24,6 +25,10 @@
 #include "entities/player.h"
 #include "entities/projectile.h"
 #include "entities/enemy.h"
+#include "entities/stretch_bird_shot.h"
+#include "entities/deck_turret_shot.h"
+#include "entities/mad_pecker_shot.h"
+#include "gameplay/deck_turret_effect.h"
 #include "entities/pickup.h"
 #include "entities/boss.h"
 #include "entities/stage_object.h"
@@ -162,6 +167,13 @@ private:
     Tilemap tilemap_;
     Player player_;
     std::vector<Projectile> projectiles_;
+    // Scoped OID03 lane; does not claim mixed-enemy SNES allocator parity.
+    stretch_bird_shot::Pool stretchBirdShots_;
+    deck_turret_shot::Child13Pool deckTurretShots_;
+    mad_pecker_shot::PoolController madPeckerShots_;
+    deck_turret_effect::Pool deckTurretEffects_{};
+    std::array<int, 8> stretchBirdShotParents_{};
+    std::array<unsigned, 8> stretchBirdShotAnimation_{};
     std::vector<Enemy> enemies_;
     // Stable preallocated identities awaiting a source camera-bucket event.
     std::vector<int> pendingSourceEnemySerials_;
@@ -176,6 +188,14 @@ private:
     // CP-B1C-T1-M2 boss-entry cinematic (KB-driven ceremonial walk + camera
     // pan, both relative to the engine's own settle/lock values).
     bool bossEntryCinematicActive_ = false;
+    flame_mammoth_gates::Lane fmGate_;
+    bool fmCanonicalAssets_ = false;
+    bool fmGateScope() const;
+    bool moveFmGateApproach();
+    bool beginFmGateContact();
+    void advanceFmGate();
+    void updateFmGateCamera();
+    void finishFmGateFrame();
     bool bossEntryShutterPassable_ = false;
     float bossEntryCamLockX_ = 0.0f;
     bool hasEntrySourceHitbox_ = false;
@@ -324,6 +344,8 @@ private:
     void spawnNormalBusterContactPrelude(
         const Projectile& projectile, int targetSerial, const AABB& targetBox,
         bool killedEnemy);
+    void spawnTableWeaponContactImpact(
+        const Projectile& projectile, int targetSerial, const AABB& targetBox);
     void renderBusterImpacts(float camX, float camY);
     const TextureResource* busterImpactTex_ = nullptr; // Borrowed from AssetCache.
     const TextureResource* busterNormalContactResidueTex_ = nullptr;
@@ -384,6 +406,8 @@ private:
     void spawnEnemyFromSpawn(const SpawnPoint& sp);
     void spawnStageObjectFromSpawn(const SpawnPoint& sp);
     void initBossFromSpawn(const SpawnPoint& sp);
+    void requestFmBossHandover();
+    void armFmGateRecord();
     void activateArenaWaveBoss();
     void updateArenaWaveClear();
     void completeArenaWave();
@@ -396,6 +420,15 @@ private:
     void checkStormEagleDashBreak();
     bool breakStormEagleCell(int tileX, int tileY);
     void updateEnemies();
+    void updateStretchBirdShots();
+    void allocateStretchBirdShot(const Enemy& enemy);
+    void renderStretchBirdShots(float cameraX, float cameraY);
+    void updateDeckTurretShots();
+    void updateMadPeckerShots();
+    void allocateMadPeckerShot(const Enemy& enemy);
+    void renderMadPeckerShots(float cameraX, float cameraY);
+    void allocateDeckTurretShot(const Enemy& enemy);
+    void renderDeckTurretShots(float cameraX, float cameraY);
     void updateStageObjects();
     void updateProjectiles();
     void checkBulletEnemyCollision();

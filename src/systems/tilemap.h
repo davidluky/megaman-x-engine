@@ -115,6 +115,13 @@ struct TileLayer {
     std::string name;
     float parallaxX = 1.0f;  // Scroll rate relative to camera (1.0 = same speed)
     float parallaxY = 1.0f;  // Values < 1.0 scroll slower (appears farther away)
+    // Vertical scroll the layer performs on its own, in PIXELS PER ANIMATION
+    // TICK, independent of the camera. Storm Eagle's BG2 backdrop measures
+    // -0.5 px/frame outside the deck and -8 px/frame from camera x 5779 on
+    // (knowledge_base/mmx1/stages/storm-eagle/bg2_autoscroll.json). The
+    // accumulated offset is floored to whole pixels, which reproduces the
+    // measured "alternating 0 and -1" shape of the slow rate.
+    float autoScrollY = 0.0f;
     std::vector<int> data;   // Tile IDs, row-major: index = y * width + x
 
     // Optional pre-rendered layer image. When set, renderLayer blits this
@@ -157,6 +164,7 @@ struct TileLayerRenderDiagnostic {
     std::vector<std::string> visualSectionIds;
     float parallaxX = 1.0f;
     float parallaxY = 1.0f;
+    float autoScrollY = 0.0f;
     int previewOffsetX = 0;
     int previewOffsetY = 0;
     int scrollX = 0;
@@ -315,6 +323,17 @@ public:
                                        std::string_view activeVisualSectionId,
                                        int visualPhaseTick);
 
+    // T1.6b autotest-only knob (`MMX_AUTOTEST_BG2_PHASE_Y`, read in main.cpp
+    // next to MMX_AUTOTEST_RENDER_CAMERA_X/Y). A movie anchor forces the
+    // frame's PPU camera but not the frame's BG2 phase, so a layer that
+    // scrolls on its own lands at whatever offset the harness's animTick has
+    // reached. When this is set, every layer whose `autoScrollY` is nonzero
+    // uses it as its whole-pixel vertical offset instead of the accumulated
+    // rate; layers with `autoScrollY == 0` are unaffected. No gameplay path
+    // sets it.
+    static void setAutoScrollPhaseOverrideY(std::optional<int> phase);
+    static std::optional<int> autoScrollPhaseOverrideY();
+
     std::vector<TileLayerRenderDiagnostic> collectRenderLayerDiagnostics(
         float cameraX, float cameraY,
         std::string_view activeCameraSectionId,
@@ -411,6 +430,9 @@ public:
     int tilesetFramePeriod() const { return tilesetFramePeriod_; }
 
 private:
+    // Autotest-only auto-scroll phase override (see setAutoScrollPhaseOverrideY).
+    static std::optional<int> autoScrollPhaseOverrideY_;
+
     std::string stageName_;
     std::string stageSource_;
 

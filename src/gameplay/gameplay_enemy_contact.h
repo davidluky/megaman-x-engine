@@ -3,8 +3,10 @@
 #include "entities/enemy.h"
 #include "entities/player.h"
 #include "entities/player_anchor.h"
+#include "entities/projectile.h"
 
 #include <cmath>
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -23,6 +25,21 @@ struct SourceProfile {
     std::uint8_t halfExtentX;
     std::uint8_t halfExtentY;
 };
+
+inline std::optional<SourceProfile> stretchBirdHeadProfile(const Enemy& enemy) {
+    if (enemy.type != "stretch_bird" || enemy.behavior != EnemyBehavior::Anchored) return std::nullopt;
+    // head_launch.json: C559 + 2*(control & 3F), four bytes per descriptor.
+    constexpr std::array<SourceProfile, 9> heads{{
+        {-1,-22,5,14}, {-13,-12,7,8}, {-17,1,12,6},
+        {-13,18,10,7}, {1,24,6,8}, {15,15,5,7},
+        {16,-2,9,5}, {13,-14,7,7}, {-1,-15,7,10}
+    }};
+    const auto control = enemy.stretchBirdState().animation.current().control & 0x3Fu;
+    if ((control & 1u) || control / 2 >= heads.size()) return std::nullopt;
+    auto head = heads[control / 2];
+    if (!enemy.facingRight) head.offsetX = static_cast<std::int8_t>(-head.offsetX);
+    return head;
+}
 
 inline std::optional<SourceProfile> playerProfile(const Player& player) {
     const auto profile = player.sourceContactProfile();
@@ -54,6 +71,59 @@ inline bool inclusiveAxisOverlap(std::uint16_t distance,
     // SEC/SBC carry survives the source's following INC: equality is contact.
     const auto extent = static_cast<std::uint8_t>(playerHalfExtent + enemyHalfExtent);
     return distance <= extent;
+}
+
+inline SourceContactResult resolveSourceLogPlayerContact(const Projectile& shot, const Player& player) {
+    const auto profile = playerProfile(player);
+    if (!shot.sourceAxeMaxLog || !profile) return {};
+    // C0D6=(0,0,13,6); contact reads live integer anchors, not sprite edges.
+    const auto box = shot.getHitbox();
+    const auto px = sourceWord(player_anchor::sourceRamAnchorX(
+        player.position.x, player.spriteWidth, player.facingRight) + profile->offsetX);
+    const auto py = sourceWord(player.position.y + 40 + profile->offsetY);
+    return {true,
+        inclusiveAxisOverlap(sourceWordDistance(px, sourceWord(box.x + box.w/2)),
+                             profile->halfExtentX, 13) &&
+        inclusiveAxisOverlap(sourceWordDistance(py, sourceWord(box.y + box.h/2)),
+                             profile->halfExtentY, 6)};
+}
+
+inline SourceContactResult resolveSourceBusterEnemyContact(const Projectile& projectile, const Enemy& enemy) {
+    const auto charge = projectile.sourceChargeHitProfile();
+    if (charge && projectile.sourceCollisionCenterOffset && enemy.hasSourceWalker()) {
+        // charge_l1_contact_phase_2026-09-17.json: compare live integer words.
+        const auto center = *projectile.sourceCollisionCenterOffset;
+        const auto px = sourceWord(projectile.position.x + center.x +
+            (projectile.facingRight ? charge->offsetX : -charge->offsetX));
+        const auto py = sourceWord(projectile.position.y + center.y + charge->offsetY);
+        return {true,
+            inclusiveAxisOverlap(sourceWordDistance(px, sourceWord(enemy.position.x)),
+                                 charge->halfExtentX, 12) &&
+            inclusiveAxisOverlap(sourceWordDistance(py, sourceWord(enemy.position.y - 1)),
+                                 charge->halfExtentY, 11)};
+    }
+    if (!projectile.sourceCollisionCenterOffset || !projectile.isPlayerShot ||
+        projectile.weaponId != "buster" || projectile.type != ProjectileType::Normal) return {};
+    const auto head = stretchBirdHeadProfile(enemy);
+    if (!head) return {};
+    const auto center = *projectile.sourceCollisionCenterOffset;
+    const auto px = sourceWord(projectile.position.x + center.x);
+    const auto py = sourceWord(projectile.position.y + center.y);
+    const auto overlaps = [&](SourceProfile profile) {
+        const auto x = static_cast<std::uint16_t>(sourceWord(enemy.position.x) + profile.offsetX);
+        const auto y = static_cast<std::uint16_t>(sourceWord(enemy.position.y) + profile.offsetY);
+        // BF68 = 00 00 07 07, independently of the normal shot's visual bounds.
+        return inclusiveAxisOverlap(sourceWordDistance(px,x),7,profile.halfExtentX)
+            && inclusiveAxisOverlap(sourceWordDistance(py,y),7,profile.halfExtentY);
+    };
+    return {true, overlaps(*head) || overlaps({static_cast<std::int8_t>(enemy.facingRight ? 1 : -1),14,5,22})};
+}
+
+inline std::optional<int> sourceBusterEnemyDamage(const Projectile& projectile, const Enemy& enemy) {
+    // walker_release_2026-09-17.json: OID1 reads $86:EF7E=4. Other charges differ.
+    if (enemy.hasSourceWalker() && projectile.sourceCollisionCenterOffset &&
+        projectile.sourceChargeHitProfile()) return 4;
+    return std::nullopt;
 }
 
 // standing_log_contact.json: C0CE corrects the Player's integer X word in
@@ -93,13 +163,17 @@ inline std::optional<int> resolveSourceAxeMaxLogHorizontal(
 
 inline SourceContactResult resolveSourcePlayerEnemyContact(
     const Player& player, const Enemy& enemy) {
-    if (enemy.type != "se_drone" || enemy.behavior != EnemyBehavior::HoverPatrol) {
+    const bool drone = enemy.type == "se_drone" &&
+        enemy.behavior == EnemyBehavior::HoverPatrol;
+    const bool flamingle = enemy.type == "stretch_bird" &&
+        enemy.behavior == EnemyBehavior::Anchored;
+    const bool walker = enemy.hasSourceWalker();
+    if (!drone && !flamingle && !walker) {
         return {};
     }
     const auto playerBox = playerProfile(player);
     if (!playerBox) return {};
 
-    constexpr SourceProfile enemyBox{0, -13, 7, 6}; // $86:D2E8 = 00 F3 07 06
     const auto playerX = sourceWord(player_anchor::sourceRamAnchorX(
         player.position.x, player.spriteWidth, player.facingRight));
     const auto playerY = sourceWord(player.position.y + 40.0f);
@@ -108,12 +182,26 @@ inline SourceContactResult resolveSourcePlayerEnemyContact(
     const auto shifted = [](std::uint16_t word, std::int8_t offset) {
         return static_cast<std::uint16_t>(static_cast<std::int32_t>(word) + offset);
     };
-    const auto dx = sourceWordDistance(shifted(playerX, playerBox->offsetX),
-                                       shifted(enemyX, enemyBox.offsetX));
-    const auto dy = sourceWordDistance(shifted(playerY, playerBox->offsetY),
-                                       shifted(enemyY, enemyBox.offsetY));
-    return {true, inclusiveAxisOverlap(dx, playerBox->halfExtentX, enemyBox.halfExtentX) &&
-                  inclusiveAxisOverlap(dy, playerBox->halfExtentY, enemyBox.halfExtentY)};
+    const auto overlaps = [&](SourceProfile enemyBox) {
+        const auto dx = sourceWordDistance(shifted(playerX, playerBox->offsetX),
+                                           shifted(enemyX, enemyBox.offsetX));
+        const auto dy = sourceWordDistance(shifted(playerY, playerBox->offsetY),
+                                           shifted(enemyY, enemyBox.offsetY));
+        return inclusiveAxisOverlap(dx, playerBox->halfExtentX, enemyBox.halfExtentX) &&
+               inclusiveAxisOverlap(dy, playerBox->halfExtentY, enemyBox.halfExtentY);
+    };
+    if (drone) return {true, overlaps({0,-13,7,6})}; // $86:D2E8
+    // walker_player_contact_2026-09-17.json: executed D3F8 vs A552 comparison.
+    if (walker) return {true, overlaps({0,-1,12,11})};
+    const auto head = stretchBirdHeadProfile(enemy);
+    if (!head) return {};
+    SourceProfile body{1,14,5,22};
+    if (!enemy.facingRight) {
+        body.offsetX = static_cast<std::int8_t>(-body.offsetX);
+    }
+    // 81:C094 evaluates the selected head, then 81:C0CD evaluates C555.
+    // C551 is a separate proximity trigger; never use it as a hurtbox.
+    return {true, overlaps(*head) || overlaps(body)};
 }
 
 } // namespace mmx::gameplay_enemy_contact

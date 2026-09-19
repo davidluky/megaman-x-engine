@@ -4,6 +4,9 @@
 #pragma once
 
 #include "actor.h"
+#include "stretch_bird_parent.h"
+#include "deck_turret_parent.h"
+#include "mad_pecker_parent_source.h"
 #include "systems/animation.h"
 #include "systems/raylib_resource.h"
 #include <memory>
@@ -192,6 +195,10 @@ public:
     // Set references for AI
     void setTarget(Player* target) { target_ = target; }
     void setTilemap(const Tilemap* tm) { tilemap_ = tm; }
+    // Opt-in for the measured canonical CP Walker instance (T1.7l).
+    void configureSourceWalker();
+    bool hasSourceWalker() const { return sourceWalker_; }
+    void finishSourceWalkerMotion(float attemptedY);
 
     EnemyBehavior behavior = EnemyBehavior::Patrol;
     EnemyState enemyState = EnemyState::Idle;
@@ -209,6 +216,10 @@ public:
     bool cameraActivated = false;
     // R72: opt-in only for authored Axe Max placements in canonical CP.
     void configureCpCameraReturn();
+    std::optional<Vector2> sourceCreationOrigin() const {
+        if (cpCameraReturn_) return cameraReturnSourceOrigin_;
+        return std::nullopt;
+    }
     bool recycleForCameraExit(float cameraX, float cameraY);
     int hitFlash = 0;          // frames remaining of the white damage flash
     int hitFlashVisual = 0;    // FW7-REVIEW-C: exact palette-0 flash frames left (1 on a surviving hit)
@@ -250,13 +261,26 @@ public:
     // at the retained source origin minus16Y, independent of body settling.
     // Other placements and stock/lifecycle states keep their existing path.
     std::optional<Vector2> cpRemnantLogSourceAnchor() const {
-        if (!cpCameraReturn_ || !active || !remnant_ || axeStack_ != 2 ||
-            cameraReturnNativeOrigin_.x != 501.0f ||
-            cameraReturnNativeOrigin_.y != 1146.0f) {
+        // second_remnant_descriptors_2026-09-17.json closes the second placement.
+        const bool measured =
+            (cameraReturnNativeOrigin_.x == 501.0f && cameraReturnNativeOrigin_.y == 1146.0f) ||
+            (cameraReturnNativeOrigin_.x == 1013.0f && cameraReturnNativeOrigin_.y == 1114.0f);
+        if (!cpCameraReturn_ || !active || !remnant_ || axeStack_ != 2 || !measured) {
             return std::nullopt;
         }
         return Vector2{cameraReturnSourceOrigin_.x,
                        cameraReturnSourceOrigin_.y - 16.0f};
+    }
+
+    // The stack holds TWO stocked logs, so the source runs the $86:C0CE
+    // contact against two boxes 16 px apart. Measured 2026-09-15 (T1.7
+    // f1537, `build/t17-cp` objects.csv, the $7E1468 table): the lower log
+    // stands at (469, 1144) and the upper one settles at (469, 1128) on
+    // source frame 1545 - the retained parent origin (469, 1160) minus 32.
+    std::optional<Vector2> cpRemnantUpperLogSourceAnchor() const {
+        const auto lower = cpRemnantLogSourceAnchor();
+        if (!lower) return std::nullopt;
+        return Vector2{lower->x, lower->y - 16.0f};
     }
 
     // The launcher/log composition is a solid movement blocker in the
@@ -264,6 +288,20 @@ public:
     // body hitbox: the source lets the player collide with the stack while
     // shots can still damage the stack/body through the normal combat lane.
     AABB solidAxeStackHitbox() const;
+
+    // launcher_solid_box_2026-09-15.json (T1.7g): the source contact list of
+    // the measured CP remnant, in world (= RAM) pixels. Records in the
+    // artifact's order - launcher $1428 at the retained source origin, lower
+    // log $1468, upper log $14A8 - each walking $86:C0CE then $86:C0D2 against
+    // the player's $86:A552. Boxes are inclusive source pixels widened by one
+    // (x = centre + offset - halfExtent, w = 2 * halfExtent + 1), so a strict
+    // AABB overlap is exactly the source's `distance <= sum` contact. Empty
+    // for placements and stock states without measured record positions.
+    struct AxeStackSourceBox {
+        std::uint16_t descriptor;  // bank $86 address
+        AABB box;
+    };
+    std::vector<AxeStackSourceBox> axeStackSourceContactBoxes() const;
 
     // Per-instance visual correction used only when a source capture proves
     // that foreground snow occludes a child sprite at a different seam than
@@ -294,6 +332,7 @@ public:
         // STOPS, and persists as a ground hazard (the scene maps this to
         // the projectile's mineHazard flag).
         bool mine = false;
+        bool sourceAxeMaxLog = false;
         // Optional visual/damage override (Axe Max log: 32x16 strip; base
         // damage 2, source trace 2026-07-05). Empty sprite = legacy orb.
         std::string sprite;
@@ -306,7 +345,21 @@ public:
     };
     std::vector<PendingShot> pendingShots;
 
+    const stretch_bird_parent::State& stretchBirdState() const { return stretchBirdState_; }
+    bool consumeStretchBirdLaunch() { return std::exchange(stretchBirdLaunch_, false); }
+    void signalStretchBirdChild() { ++stretchBirdState_.childSignal; }
+    const deck_turret_parent::ParentFields& deckTurretState() const { return deckTurretController_.fields(); }
+    bool consumeDeckTurretLaunch() { return std::exchange(deckTurretLaunch_, false); }
+    const mad_pecker_parent_source::Controller& madPeckerState() const { return madPeckerController_; }
+    bool consumeMadPeckerLaunch() { return std::exchange(madPeckerLaunch_, false); }
+
 private:
+    mad_pecker_parent_source::Controller madPeckerController_{};
+    bool madPeckerLaunch_ = false;
+    deck_turret_parent::ParentController deckTurretController_{deck_turret_parent::ParentFields{}};
+    bool deckTurretLaunch_ = false;
+    stretch_bird_parent::State stretchBirdState_{};
+    bool stretchBirdLaunch_ = false;
     Player* target_ = nullptr;
     const Tilemap* tilemap_ = nullptr;
     AnimationPlayer anim_;
@@ -366,6 +419,20 @@ private:
     // toward X; firing stands stretch to 125f with the shot launched at
     // stand+48 (from anchor−18·facing at 2.25 px/f toward X, SFX 0x33).
     bool walkerWalking_ = false;
+    bool sourceWalker_ = false;
+    int sourceWalkerPhase_ = 0;
+    int sourceWalkerWait_ = 1;
+    int sourceWalkerCell_ = 0;
+    int sourceWalkerCellTicks_ = 8;
+    int sourceWalkerDrawCell_ = 0;
+    float sourceWalkerSpawnX_ = 0;
+    float sourceWalkerVx_ = 0;
+    float sourceWalkerVy_ = -4;
+    Vector2 sourceWalkerDrawPosition_{};
+    bool sourceWalkerDrawFacing_ = false;
+    bool sourceWalkerDrawReady_ = false;
+    void updateSourceWalker();
+    void pickSourceWalkerLaunch();
     int walkerTimer_ = 0;       // frames left in the current stand/walk
     int walkerStandLen_ = 0;    // current stand's total length (55 or 125)
     int walkerStandAge_ = 0;    // frames elapsed in the current stand

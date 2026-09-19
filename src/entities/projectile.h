@@ -5,7 +5,9 @@
 
 #include "entity.h"
 #include "raylib.h"
+#include <cstdint>
 #include <string>
+#include <optional>
 #include <vector>
 
 // ============================================================================
@@ -38,6 +40,70 @@ enum class ProjectileType {
     ChargeL3    // Buster upgrade — spiral shot, huge damage
 };
 
+// ============================================================================
+// source_charge_l1 — the real medium (level-1) charged Buster shot, source
+// object OID 1. Measured 2026-09-17 from the retained T1.7k Chill Penguin
+// source capture; every number here is in
+// knowledge_base/mmx1/weapons/buster/charge_l1_birth_2026-09-17.json.
+//
+// The real shot is CLAIMED at the muzzle and stays GLUED to the player's
+// integer X word for ten frames while its hit profile grows through four
+// animation cells; only then does it detach and fly. That growth — not a
+// collision grace window — is why source frame 1600 kills the OID 0x51
+// Walker at an X distance of 22 px that frame 1599 misses.
+//
+// Record fields are the LIVE words (0x04 x sub / 0x05 x pixels, 0x07 y sub /
+// 0x08 y pixels). The 0x22/0x24 words are the CACHED compare copies, one
+// frame behind; reading those as the position invents a fractional drift.
+// ============================================================================
+namespace source_charge_l1 {
+
+// $86:BE21/BE25/BE29/BE2D/BE31, four bytes per descriptor: signed anchor
+// offset then unsigned half extents (the same shape the enemy/player contact
+// profiles use).
+struct HitProfile {
+    std::int8_t offsetX = 0;
+    std::int8_t offsetY = 0;
+    std::uint8_t halfExtentX = 0;
+    std::uint8_t halfExtentY = 0;
+};
+
+// Frames are counted from the claim frame (the frame the source record is
+// allocated = the engine tick Player::fireShot runs). Cells last two frames
+// each; cell 3 repeats (art $0C then $8C) before the shot launches.
+constexpr int kLaunchFrame = 10;
+// The anchor is the player's RAM anchor INTEGER word + this offset, mirrored
+// in X for left-facing fire, and it is re-derived every held frame (the shot
+// slides with a walking player: claim f1726, player +1 px at f1733..1735).
+// Grounded stand-fire pose only; the single airborne-pose sample in the
+// capture (claim f1807, anim 122/125/128) uses (+25, -8), integrated only
+// for right-facing Fall. Observed claim fractions are not promoted until
+// initialization writes are distinguished from retained slot contents.
+constexpr float kClaimAnchorOffsetX = 16.0f;
+constexpr float kClaimAnchorOffsetY = -3.0f;
+// From the launch frame on the shot detaches and advances exactly 6 px per
+// frame — no fractional term (30+ frames in each of four lives, both
+// facings). Whether the flight X is also held to whole pixels by a separate
+// subpixel lane is not established: x sub read 0 for every sampled frame.
+constexpr float kFlightStepPx = 6.0f;
+
+constexpr HitProfile profileForFrame(int framesSinceClaim) {
+    if (framesSinceClaim < 2) return {0, 5, 9, 9};    // $86:BE21
+    if (framesSinceClaim < 4) return {0, 0, 13, 13};  // $86:BE25 — kills at f1600
+    if (framesSinceClaim < 6) return {-1, 0, 16, 9};  // $86:BE29
+    if (framesSinceClaim < kLaunchFrame) return {-6, 0, 19, 9};  // $86:BE2D
+    return {-5, 0, 22, 12};                           // $86:BE31 — flight
+}
+
+// Movement of the shot's OWN anchor. While held it is zero: any apparent
+// motion in those frames is the player-follow above, which the caller
+// applies from the live player anchor, not a velocity.
+constexpr float stepPxForFrame(int framesSinceClaim) {
+    return framesSinceClaim < kLaunchFrame ? 0.0f : kFlightStepPx;
+}
+
+} // namespace source_charge_l1
+
 enum class ProjectileVisualStyle {
     BusterSprite,
     BusterCharge1,
@@ -58,6 +124,14 @@ public:
     void applyWeaponVisual(const std::string& weaponId, bool charged);
     void applyEnemyVisual();
     bool usesOneHitPerTargetGate() const;
+    // Live source hit profile of a medium-charge shot, for the source-backed
+    // enemy contact path. Empty unless this projectile opted into the
+    // measured law; ageFrames has already been advanced for the tick, so the
+    // claim frame reads back as frame 0.
+    std::optional<source_charge_l1::HitProfile> sourceChargeHitProfile() const;
+    void configureSourceChargeL1(float playerRamX, float playerRamY,
+                                Vector2 muzzleOffset = {16.0f, -3.0f});
+    void followSourceChargeL1(float playerRamX);
     bool shouldConsumeAfterEnemyHit(bool killedEnemy) const;
     int damageToBoss() const;
     bool hasHitEnemySerial(int enemySerial) const;
@@ -69,6 +143,10 @@ public:
 
     ProjectileType type = ProjectileType::Normal;
     int serial = 0;          // Monotonic spawn id (assigned in init; trace/tests)
+    // Birth-authenticated RAM center relative to position; rendering/legacy
+    // physics remain independent. Only grounded right-idle normal Buster opts in.
+    std::optional<Vector2> sourceCollisionCenterOffset;
+    bool advancedForEnemyShotPhase = false;
     void assignFreshSerial();  // for copies (e-spark twin) — see init()
     float speed = 5.0f;      // Base speed (used for player shots facing direction)
     float vx = 0, vy = 0;    // Actual velocity components (used for movement)
@@ -92,6 +170,13 @@ public:
     // Stationary "formation" window: no movement until ageFrames exceeds
     // this (Electric Spark charged giants: both launch at release+12).
     int launchDelayFrames = 0;
+    // Opt-in for the measured OID 1 medium-charge law above (muzzle claim,
+    // ten following frames, growing hit profile, 6 px/frame flight).
+    // Player::fireShot opts in grounded releases and right-facing Fall;
+    // unmeasured charge paths keep their old mover.
+    bool sourceChargeL1Law = false;
+    bool sourceAxeMaxLog = false;
+    Vector2 sourceChargeMuzzleOffset{16.0f, -3.0f};
     // Pierces ALL terrain (Electric Spark split children — oracle: the
     // down-slope child crossed the floor and died off-screen).
     bool ignoresTerrain = false;

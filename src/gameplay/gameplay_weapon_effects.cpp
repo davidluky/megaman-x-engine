@@ -125,6 +125,21 @@ void GameplayScene::spawnNormalBusterSurvivorContactResidue(
     busterImpacts_.push_back(impact);
 }
 
+void GameplayScene::spawnTableWeaponContactImpact(
+    const Projectile& projectile, int targetSerial, const AABB& targetBox) {
+    // T1.2a.2 step 4: the pinned special-weapon contact constants of
+    // knowledge_base/mmx1/weapons/impact_contact_law_2026-09-15.json (today,
+    // Shotgun Ice alone). Weapons absent from the table spawn nothing.
+    const auto constants =
+        gameplay_buster_impact::tableWeaponContact(projectile.weaponId);
+    if (!constants.has_value()) return;
+    const AABB shot = projectile.getHitbox();
+    busterImpacts_.push_back(gameplay_buster_impact::spawnTableWeaponContact(
+        {shot.x, shot.y, shot.w, shot.h, projectile.facingRight},
+        {targetBox.x, targetBox.y, targetBox.w, targetBox.h}, *constants,
+        projectile.serial, targetSerial));
+}
+
 void GameplayScene::renderBusterImpacts(float camX, float camY) {
     if (busterImpacts_.empty()) return;
 
@@ -135,7 +150,9 @@ void GameplayScene::renderBusterImpacts(float camX, float camY) {
             impact.kind == gameplay_buster_impact::
                                ImpactKind::NormalBusterLethalContactResidue ||
             impact.kind == gameplay_buster_impact::
-                               ImpactKind::NormalBusterSurvivorContactResidue;
+                               ImpactKind::NormalBusterSurvivorContactResidue ||
+            impact.kind ==
+                gameplay_buster_impact::ImpactKind::TableWeaponContact;
         const TextureResource*& texture = normalBusterContact
             ? busterNormalContactResidueTex_
             : busterImpactTex_;

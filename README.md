@@ -11,6 +11,26 @@ original dialogue and generated visual tables are not included.
 [Contribute with AI](https://megaman.davidluky.com/en/contribute/ai/) ·
 [Português](https://megaman.davidluky.com/)
 
+## Project status — September 19, 2026
+
+The [feature checklist](https://megaman.davidluky.com/en/roadmap/) now breaks
+X1 into **192 features and 517 acceptance steps**, with **7.92% verified** under
+the revised weighting. This is a scope/acceptance index, not a measure of time
+spent or a claim that the remainder has no implementation. Reusable enemy
+families count once; stage-specific placement and interaction count separately.
+
+Expand features to see available artwork and dated native-engine clips,
+including movement, dash, Buster, Homing Torpedo, the drifting bat, Walker and
+Axe Max. Captures retain their limitations and do not prove a whole feature.
+The [machine-readable plan](https://megaman.davidluky.com/downloads/X1-COMPLETION.json)
+and [readable plan](https://megaman.davidluky.com/downloads/X1-COMPLETION.md)
+define the complete X1 scope. X2, X3 and extra modes are separate expansions.
+
+**The website's playable development build and this public source snapshot are
+not the same release.** Later gameplay fixes and clips are not automatically
+included here. The public repository remains an asset-independent contribution
+baseline; see [project status and contributions](docs/project-status.md).
+
 ## Build and test
 
 Requirements: C++17 compiler, CMake 3.20+, Ninja, raylib and nlohmann_json.

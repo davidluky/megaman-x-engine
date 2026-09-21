@@ -62,9 +62,9 @@ $env:PATH = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;" + $env:PATH
 ```
 
 The default target is `mmx-engine-core`; `BUILD_TESTING` is ON. The initial
-snapshot includes **15 contracts** for input/settings, stage identity,
+snapshot includes **17 contracts** for input/settings, JSON I/O, screen transforms, stage identity,
 passwords, randomization and several deterministic entity models.
-The native library build and 15/15 contracts passed on Windows MINGW64.
+The native library build and 17/17 contracts passed on Windows MINGW64.
 Other platforms are welcome contributions and are not claimed as tested.
 
 `MMX_PUBLIC_BUILD_ENGINE=ON` is an advanced local option that fails explicitly

@@ -47,8 +47,8 @@ full game build.
 
 | Task | Source and test scope | Done when |
 |---|---|---|
-| Review the proposed [screen-transform contract (PR #1)](https://github.com/davidluky/megaman-x-engine/pull/1) before starting duplicate work | `src/app/screen_transform.h`; add `tests/cpp/screen_transform_contract_test.cpp` and register it with the public test target. | The contract covers invalid window dimensions, letterbox/pillarbox points outside the internal viewport, and the existing native/aspect-preserving mappings without opening a window or loading assets. |
-| Add a JSON I/O result contract | `src/data/json_io.h` and `src/data/json_io.cpp`; add `tests/cpp/json_io_contract_test.cpp`. | Temporary files prove open failure, malformed JSON, object-schema rejection, successful object reads, and atomic write/reload behavior using `ReadError`; no content pack is needed. |
+| Completed: [screen-transform contract (PR #1)](https://github.com/davidluky/megaman-x-engine/pull/1) | `src/app/screen_transform.h`; `tests/cpp/screen_transform_contract_test.cpp`. | Merged September 21. Covers invalid dimensions, letterbox/pillarbox boundaries and native/aspect mappings; fixes exact-aspect rounding. Choose another starter. |
+| Completed: [JSON I/O result contract (PR #2)](https://github.com/davidluky/megaman-x-engine/pull/2) | `src/data/json_io.h` and `src/data/json_io.cpp`; `tests/cpp/json_io_contract_test.cpp`. | Merged September 21. Covers open/parse/schema errors, reads, write/reload and replacement, using isolated temporary files. Choose another starter. |
 | Add an animation-player contract | `src/systems/animation.h` and `src/systems/animation.cpp`; add `tests/cpp/animation_contract_test.cpp`. | The test proves documented frame duration, looping, one-shot completion, `play` reset behavior, and phase-preserving `playSynced` behavior without a sprite sheet. |
 | Add a path-containment contract | `src/data/path_utils.h`; add `tests/cpp/path_utils_contract_test.cpp`. | The test proves normalized descendants are accepted, parent escapes and sibling-prefix paths are rejected, and forward-slash conversion is stable across supported hosts. |
 
@@ -80,7 +80,7 @@ cmake --build build -j 8
 ctest --test-dir build --output-on-failure
 ```
 
-The initial public selection has 15 contracts. No window, ROM or content pack
+The public selection has 17 contracts. No window, ROM or content pack
 is needed. A full-engine build is optional and requires the separately supplied
 inputs documented in [reference-data.md](docs/reference-data.md). Report
 commands exactly as run and mark unavailable commands `not run`.

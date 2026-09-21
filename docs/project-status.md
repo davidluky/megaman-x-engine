@@ -1,6 +1,6 @@
 # Project status and community contributions
 
-Reviewed September 19, 2026. The live [roadmap](https://megaman.davidluky.com/en/roadmap/)
+Reviewed September 21, 2026. The live [roadmap](https://megaman.davidluky.com/en/roadmap/)
 is the current completion map; [updates](https://megaman.davidluky.com/en/updates/)
 explain larger accepted gameplay advances. The former coarse percentage was
 recalibrated, not carried over as a claim of equivalent completion.
@@ -11,9 +11,11 @@ This public code baseline supports an asset-independent core build and contracts
 It is not a playable download and does not contain the original game's media,
 private measurements or generated visual tables. The September 19 code synchronization imports the accepted development C++
 implementation, including hurt/recovery, projectile/contact and encounter work.
-All shared C++ source now matches development commit
+That export matched development commit
 `3ea4eccd39295d897a62f38cf42d398e169f27be` except the two deliberately sanitized
 dialogue adapters. The 41-file update and hashes are in [source-sync.json](source-sync.json).
+The September 21 community screen-transform fix is now applied on top of that
+baseline. Later private development is not implied to be part of this export.
 No content, ROM, private research or generated includes were exported.
 Public build/contracts validate compilation and their specific assertions; the
 private gameplay acceptance suite and playable assets remain separate.
@@ -28,31 +30,33 @@ totals 100%. Partial features earn only their accepted steps.
 
 - [MattBetancourt's pull request #1](https://github.com/davidluky/megaman-x-engine/pull/1)
   adds a screen-transform contract and fixes rounding at an exact-aspect viewport
-  boundary. It remains open pending maintainer acceptance; it is not part of main.
-- The same contributor has a separate [JSON I/O contract branch](https://github.com/MattBetancourt/megaman-x-engine/tree/task/json-io-contract).
-  No pull request for that branch was present at review time; it is not accepted.
+  boundary. It was reviewed and merged September 21.
+- The same contributor's [JSON I/O contract](https://github.com/davidluky/megaman-x-engine/pull/2)
+  was integrated from his branch, with original authorship preserved, and merged
+  September 21. Maintainer corrections isolate temporary directories and cover
+  replacement of an existing destination.
 - Three public forks and five stars were visible at review time. Forks and stars
   signal interest, not completed contributions. The other two forks' main branches
   had no commits ahead of upstream.
 
 Before taking a starter task, check existing pull requests and contributor branches
-so work is not duplicated. The screen-transform starter already has a proposal.
-The website now marks both proposals unavailable for duplicate implementation.
+so work is not duplicated. Both starters above are completed and unavailable for
+duplicate implementation.
 Choose a bounded task from [CONTRIBUTING.md](../CONTRIBUTING.md) or use the
 [AI contribution kit](https://megaman.davidluky.com/en/contribute/ai/).
 
 ## Maintainer-side verification
 
-PR #1 was checked at `f05dc3a1484e2272983c12154fe270fb0183b10b` in an isolated
-checkout on Windows/MINGW64 (GCC 16.1, raylib 5.5, nlohmann_json 3.12).
-CMake Release configuration and the complete default core build succeeded;
-all 16 public CTest contracts passed, including `screen-transform.contract`.
-Existing compiler warnings remain. This validates the submitted PR revision,
-not an integrated main branch or playable-game fidelity. No PR review/comment
-was posted and no merge was performed during this status update.
+On Windows/MINGW64 (GCC 16.1, raylib 5.5, nlohmann_json 3.12), the screen-transform
+regression failed on the old header and passed with PR #1. The integrated Release
+core build and all 17 public CTest contracts passed after both contributions.
+The JSON contract also passed 64 runs with eight concurrent processes, preserving
+a pre-existing legacy directory and cleaning only its own acquired directories.
+Existing compiler warnings remain. These checks do not claim playable-game
+fidelity or filesystem crash durability.
 
-Maintenance lesson: public task availability must reflect incoming proposals,
-while development-build progress must not be presented as exported public code.
+Maintenance lesson: review test side effects as carefully as production changes;
+keep contributor credit, accepted code and task availability synchronized.
 
 ## September 19 synchronization receipt
 
